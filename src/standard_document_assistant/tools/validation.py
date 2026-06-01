@@ -11,6 +11,8 @@ from standard_document_assistant.schemas import (
     MemoryUpdateProposal,
     MetadataExtractionResult,
     MinerUParseResult,
+    ReviewIssue,
+    ReviewToolResult,
     StandardMetadataExtraction,
     UploadedFileRecord,
 )
@@ -26,6 +28,8 @@ def validate_output_schema(payload: str | dict[str, Any], schema_name: str = "Ag
         "MemoryUpdateProposal": MemoryUpdateProposal,
         "MetadataExtractionResult": MetadataExtractionResult,
         "MinerUParseResult": MinerUParseResult,
+        "ReviewIssue": ReviewIssue,
+        "ReviewToolResult": ReviewToolResult,
         "StandardMetadataExtraction": StandardMetadataExtraction,
         "UploadedFileRecord": UploadedFileRecord,
     }
@@ -64,4 +68,3 @@ def propose_memory_update(target_path: str, content: str, reason: str) -> dict[s
         }
     )
     return payload
-

@@ -3,6 +3,7 @@ from standard_document_assistant.tracing import (
     METADATA_EXTRACTION_TOOL_NAME,
     build_subgraph_runnable_config,
 )
+from standard_document_assistant.tools import extract_standard_metadata, parse_file_with_mineru
 
 
 def test_build_subgraph_runnable_config_merges_parent() -> None:
@@ -25,3 +26,8 @@ def test_build_subgraph_runnable_config_merges_parent() -> None:
     assert child["metadata"]["tool_call_id"] == "call-123"
     assert child["metadata"]["orchestration_tool"] == METADATA_EXTRACTION_TOOL_NAME
     assert child["metadata"]["source_virtual_path"] == "/workspace/input/x.md"
+
+
+def test_traced_tools_do_not_expose_runtime_in_schema() -> None:
+    assert "runtime" not in parse_file_with_mineru.args
+    assert "runtime" not in extract_standard_metadata.args

@@ -32,8 +32,13 @@ from standard_document_assistant.prompts import (
 from standard_document_assistant.schemas import AgentResult
 from standard_document_assistant.tools import (
     extract_standard_metadata,
-    parse_pdf_with_mineru,
+    inspect_review_rules,
+    parse_document_with_mineru,
+    parse_file_with_mineru,
+    run_format_source_review,
+    run_standard_review,
     validate_output_schema,
+    validate_review_result_schema,
     STANDARD_DOCUMENT_TOOLS,
 )
 
@@ -254,13 +259,13 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
     use_hitl = hitl_enabled(langgraph_server=langgraph_server)
     parser_spec: dict[str, Any] = {
         "name": "parser",
-        "description": "解析用户上传的 PDF 标准文档，调用 MinerU 生成 Markdown、图片、JSON 和 manifest。",
+        "description": "解析用户上传的 PDF 或 Word 标准文档，调用 MinerU 生成 Markdown、图片、JSON 和 manifest。",
         "system_prompt": PARSER_PROMPT,
-        "tools": [parse_pdf_with_mineru],
+        "tools": [parse_file_with_mineru],
         "skills": [parsing_skill],
     }
     if use_hitl:
-        parser_spec["interrupt_on"] = {"parse_pdf_with_mineru": True}
+        parser_spec["interrupt_on"] = {"parse_file_with_mineru": True}
 
     extractor_spec: dict[str, Any] = {
         "name": "extractor",
@@ -272,16 +277,30 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
     if use_hitl:
         extractor_spec["interrupt_on"] = {"extract_standard_metadata": True}
 
+    reviewer_spec: dict[str, Any] = {
+        "name": "reviewer",
+        "description": "执行标准文档内容轨和格式轨审核，调用标准审核工具写入报告、结果、trace 和 manifest。",
+        "system_prompt": REVIEWER_PROMPT,
+        "tools": [
+            parse_document_with_mineru,
+            run_standard_review,
+            run_format_source_review,
+            inspect_review_rules,
+            validate_review_result_schema,
+        ],
+        "skills": [review_skill],
+    }
+    if use_hitl:
+        reviewer_spec["interrupt_on"] = {
+            "parse_document_with_mineru": True,
+            "run_standard_review": True,
+            "run_format_source_review": True,
+        }
+
     return [
         parser_spec,
         extractor_spec,
-        {
-            "name": "reviewer",
-            "description": "执行标准文档结构、术语、引用和一致性审核；使用内置文件工具写入报告。",
-            "system_prompt": REVIEWER_PROMPT,
-            "tools": [validate_output_schema],
-            "skills": [review_skill],
-        },
+        reviewer_spec,
         {
             "name": "research",
             "description": "基于已提供材料和模板做参考资料梳理；正式检索工具后续单独接入。",
@@ -355,8 +374,11 @@ def build_standard_document_agent(*, strict_model: bool = False, langgraph_serve
         agent_kwargs["interrupt_on"] = {
             "write_file": True,
             "edit_file": True,
-            "parse_pdf_with_mineru": True,
+            "parse_file_with_mineru": True,
+            "parse_document_with_mineru": True,
             "extract_standard_metadata": True,
+            "run_standard_review": True,
+            "run_format_source_review": True,
             "propose_memory_update": True,
             "execute": True,
         }

@@ -1,6 +1,6 @@
 # 标准文档助手
 
-这是一个基于 Deep Agents SDK 的标准文档助手实现，当前主链路聚焦用户上传标准文档后的 PDF 解析和国标元数据抽取：上传文件保存到 `/workspace/input/uploads/`，PDF 通过 MinerU 解析为 Markdown，Markdown 通过 LangGraph 子图抽取结构化元数据，并将结果和 manifest 写入 `/workspace/output/`。
+这是一个基于 Deep Agents SDK 的标准文档助手实现，当前主链路聚焦用户上传标准文档后的文档解析、国标元数据抽取和标准审核编排：上传文件保存到 `/workspace/input/uploads/`，PDF/Word 通过 MinerU 解析为 Markdown，Markdown 可分别进入元数据抽取或标准审核链路，并将结果和 manifest 写入 `/workspace/output/`。
 
 ## 结构
 
@@ -14,7 +14,7 @@
 SDK 实现在 `src/standard_document_assistant/`：
 
 - `agent.py`：`create_deep_agent()` 工厂、`CompositeBackend`、permissions、memory seed、subagents。
-- `tools/`：正式业务工具，包含 `parse_pdf_with_mineru`、`extract_standard_metadata`、schema 校验和记忆提案。
+- `tools/`：正式业务工具，包含 `parse_file_with_mineru`、`extract_standard_metadata`、schema 校验和记忆提案。
 - `graphs/metadata_extraction/`：元数据抽取 LangGraph 子图。
 - `integrations/mineru/`：MinerU HTTP 和 ZIP 后处理集成。
 - `uploads.py`：应用层上传文件保存辅助函数。
@@ -79,7 +79,7 @@ langgraph dev --config .\langgraph.json
 说明：
 
 - Graph ID：`agent`（主编排，`agent.py:agent`）、`metadata_extraction`（元数据子图，`metadata_extraction_graph.py:metadata_extraction`）。
-- **LangSmith 追踪**：主编排通过 `task` → `extractor` → `extract_standard_metadata` 调用子图时，工具会把父级 `RunnableConfig`（callbacks/tags/metadata）传入子图，在 LangSmith 中展开为嵌套 run（`metadata_extraction` → 各节点，含 `run_langextract`）。在 Studio 中选 `metadata_extraction` graph 可单独调试子图拓扑；在 thread trace 中展开 `extract_standard_metadata` 工具 run 可查看与主编排的协作关系。需开启 `LANGSMITH_TRACING=true` 且配置 `LANGSMITH_API_KEY`。
+- **LangSmith 追踪**：主编排通过 `task` → `parser` → `parse_file_with_mineru` 可查看 MinerU 解析工具 run；通过 `task` → `extractor` → `extract_standard_metadata` 调用子图时，工具会把父级 `RunnableConfig`（callbacks/tags/metadata）传入子图，在 LangSmith 中展开为嵌套 run（`metadata_extraction` → 各节点，含 `run_langextract`）。在 Studio 中选 `metadata_extraction` graph 可单独调试子图拓扑；在 thread trace 中展开对应 tool run 可查看与主编排的协作关系。需开启 `LANGSMITH_TRACING=true` 且配置 `LANGSMITH_API_KEY`。
 - `langgraph dev` 会读取 `.env` 中的 `DASHSCOPE_API_KEY` 和 LangSmith 配置。
 - LangGraph Server 模式不会注入 CLI 用的 `MemorySaver` / `InMemoryStore`，持久化由 dev server 或部署平台提供。
 - Deep Agents 内置文件工具只能使用虚拟路径，例如 `/workspace/input/sample.md`、`/memories/preferences.md`、`/skills/standard-review/SKILL.md`；不要在 Studio 中使用 `D:\deep-agents` 这类 Windows 绝对路径。
@@ -104,7 +104,7 @@ langgraph deploy --name standard-document-assistant
 
 ## 当前边界
 
-- PDF 解析依赖外部 MinerU 服务，需要配置 `MINERU_API_BASE_URL`。
-- Word/DOCX 转换、正式参考检索、正式审核报告工具、正式起草工具尚未接入。
+- PDF/Word 解析依赖外部 MinerU 服务，需要配置 `MINERU_API_BASE_URL`。
+- 正式参考检索、正式审核报告工具、正式起草工具尚未接入。
 - `vision_parser` 暂不启用，后续需要单独设计视觉/OCR 边界。
 - SSE 和审批接口已提供代码骨架，尚未绑定具体 Web 框架。

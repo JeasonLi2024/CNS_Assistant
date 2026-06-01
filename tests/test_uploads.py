@@ -16,6 +16,16 @@ def test_save_uploaded_file_writes_to_thread_upload_dir() -> None:
     assert Path(record.host_path).exists()
 
 
+def test_save_uploaded_file_accepts_docx() -> None:
+    record = save_uploaded_file(
+        original_filename="standard.docx",
+        content=b"docx bytes",
+        thread_id="test-upload-docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    assert record.virtual_path.endswith(".docx")
+
+
 def test_save_uploaded_file_rejects_sensitive_name() -> None:
     with pytest.raises(ValueError):
         save_uploaded_file(
@@ -23,4 +33,3 @@ def test_save_uploaded_file_rejects_sensitive_name() -> None:
             content=b"secret",
             thread_id="test-upload",
         )
-

@@ -51,7 +51,7 @@ class ArtifactManifest(BaseModel):
 
 
 class MinerUParseResult(BaseModel):
-    """Public result returned by parse_pdf_with_mineru."""
+    """Public result returned by parse_file_with_mineru."""
 
     status: Literal["ok", "failed"] = "ok"
     source_virtual_path: str = ""
@@ -101,6 +101,50 @@ class MetadataExtractionResult(BaseModel):
     validation: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class ReviewIssue(BaseModel):
+    """A standard review issue with traceable rule and evidence references."""
+
+    issue_id: str = ""
+    rule_id: str = ""
+    rule_name: str = ""
+    scope: str = ""
+    route: str = "standard_review"
+    audit_track: Literal["content", "format_source"] = "content"
+    severity: Literal["critical", "major", "minor", "info"] = "info"
+    status: Literal["pass", "fail", "warn", "insufficient_context", "llm_error"] = "warn"
+    expected: str = ""
+    actual: str = ""
+    evidence_text: str = ""
+    source_ref: str = ""
+    suggestion: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    llm_reasoning: str = ""
+
+
+class ReviewSummary(BaseModel):
+    """Aggregated review counters returned by standard review tools."""
+
+    total_issues: int = 0
+    failed: int = 0
+    warn: int = 0
+    insufficient_context: int = 0
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_track: dict[str, int] = Field(default_factory=dict)
+
+
+class ReviewToolResult(BaseModel):
+    """Public result returned by standard review tools."""
+
+    status: Literal["success", "failed"] = "success"
+    job_id: str = ""
+    trace_id: str = ""
+    trace_path: str = ""
+    summary: ReviewSummary = Field(default_factory=ReviewSummary)
+    artifacts: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    error: str = ""
 
 
 class Finding(BaseModel):

@@ -26,6 +26,16 @@ mineru = [
 extraction = [
     "langextract",
 ]
+review = [
+    "numpy",
+    "scikit-learn",
+    "python-docx",
+    "lxml",
+    "pymupdf",
+    "faiss-cpu",
+    "langchain-openai",
+    "openai",
+]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.8.0",

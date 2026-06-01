@@ -18,6 +18,7 @@ from standard_document_assistant.constants import (
     MINERU_OUTPUT_DIR,
     OUTPUT_DIR,
     PROJECT_ROOT,
+    REVIEWS_OUTPUT_DIR,
     SAMPLES_DIR,
     TEMPLATES_DIR,
     TMP_DIR,
@@ -141,6 +142,11 @@ def mineru_output_root(output_subdir: str | None = None) -> Path:
 
 def metadata_output_root() -> Path:
     return METADATA_OUTPUT_DIR
+
+
+def review_output_root(output_subdir: str | None = None) -> Path:
+    subdir = safe_name(output_subdir or "", fallback="")
+    return REVIEWS_OUTPUT_DIR / subdir if subdir else REVIEWS_OUTPUT_DIR
 
 
 def project_relative(path: Path) -> str:

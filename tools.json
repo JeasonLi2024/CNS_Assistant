@@ -1,8 +1,8 @@
 {
   "tools": [
     {
-      "name": "parse_pdf_with_mineru",
-      "description": "Parse an uploaded PDF standard document via MinerU into Markdown, images, JSON sidecars, and a manifest under /workspace/output/mineru."
+      "name": "parse_file_with_mineru",
+      "description": "Parse an uploaded PDF or Word standard document via MinerU into Markdown, images, JSON sidecars, and a manifest under /workspace/output/mineru."
     },
     {
       "name": "extract_standard_metadata",
@@ -18,7 +18,7 @@
     }
   ],
   "interrupt_config": {
-    "parse_pdf_with_mineru": true,
+    "parse_file_with_mineru": true,
     "extract_standard_metadata": true,
     "propose_memory_update": true
   }

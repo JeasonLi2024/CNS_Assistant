@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from standard_document_assistant.config import MinerUConfig
 from standard_document_assistant.integrations.mineru.config import build_request_data
 
 
-def request_parse_pdf(pdf_path: Path, config: MinerUConfig, *, return_images: bool) -> bytes:
-    """Call MinerU /file_parse and return ZIP bytes."""
+def _content_type_for_file(file_path: Path) -> str:
+    if file_path.suffix.lower() == ".docx":
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if file_path.suffix.lower() == ".pdf":
+        return "application/pdf"
+    return mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+
+
+def request_parse_file(file_path: Path, config: MinerUConfig, *, return_images: bool) -> bytes:
+    """Call MinerU /file_parse for a supported document and return ZIP bytes."""
 
     if not config.api_base_url:
         raise RuntimeError("缺少 MINERU_API_BASE_URL，无法调用 MinerU 服务。")
@@ -20,10 +29,10 @@ def request_parse_pdf(pdf_path: Path, config: MinerUConfig, *, return_images: bo
 
     data = build_request_data(config, return_images=return_images)
     url = config.api_base_url.rstrip("/") + "/file_parse"
-    with pdf_path.open("rb") as file_obj:
+    with file_path.open("rb") as file_obj:
         response = requests.post(
             url,
-            files={"files": (pdf_path.name, file_obj, "application/pdf")},
+            files={"files": (file_path.name, file_obj, _content_type_for_file(file_path))},
             data=data,
             timeout=config.request_timeout,
         )
@@ -34,3 +43,8 @@ def request_parse_pdf(pdf_path: Path, config: MinerUConfig, *, return_images: bo
         raise RuntimeError(f"MinerU 未返回 ZIP：content-type={content_type}; body={preview}")
     return response.content
 
+
+def request_parse_pdf(pdf_path: Path, config: MinerUConfig, *, return_images: bool) -> bytes:
+    """Backward-compatible wrapper for PDF callers."""
+
+    return request_parse_file(pdf_path, config, return_images=return_images)

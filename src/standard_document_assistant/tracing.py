@@ -8,6 +8,13 @@ from langchain_core.runnables import RunnableConfig
 
 METADATA_EXTRACTION_GRAPH_NAME = "metadata_extraction"
 METADATA_EXTRACTION_TOOL_NAME = "extract_standard_metadata"
+PARSE_FILE_WITH_MINERU_TOOL_NAME = "parse_file_with_mineru"
+PARSE_DOCUMENT_WITH_MINERU_TOOL_NAME = "parse_document_with_mineru"
+STANDARD_REVIEW_GRAPH_NAME = "standard_review"
+STANDARD_REVIEW_TOOL_NAME = "run_standard_review"
+FORMAT_SOURCE_REVIEW_TOOL_NAME = "run_format_source_review"
+INSPECT_REVIEW_RULES_TOOL_NAME = "inspect_review_rules"
+VALIDATE_REVIEW_RESULT_TOOL_NAME = "validate_review_result_schema"
 
 
 def _parent_agent_name(parent_config: RunnableConfig | None) -> str | None:

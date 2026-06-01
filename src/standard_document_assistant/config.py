@@ -37,7 +37,7 @@ class WorkspaceConfig:
     output_dir: str = "workspace/output"
     tmp_dir: str = "workspace/tmp"
     max_upload_size_mb: int = 100
-    allowed_upload_suffixes: tuple[str, ...] = (".pdf", ".md", ".markdown", ".txt")
+    allowed_upload_suffixes: tuple[str, ...] = (".pdf", ".docx", ".md", ".markdown", ".txt")
 
 
 @dataclass(frozen=True)
@@ -78,12 +78,25 @@ class MetadataExtractionConfig:
 
 
 @dataclass(frozen=True)
+class StandardReviewConfig:
+    rules_md: str = "src/standard_document_assistant/resources/review_rules/rules_test.md"
+    index_dir: str = "src/standard_document_assistant/resources/review_rules"
+    top_k: int = 8
+    max_review_rounds: int = 2
+    write_artifacts: bool = True
+    output_subdir: str = ""
+    enable_llm_review: bool = False
+    scoped_text_max_chars: int = 12000
+
+
+@dataclass(frozen=True)
 class AssistantConfig:
     runtime: RuntimeConfig = RuntimeConfig()
     primary_model: ModelConfig = ModelConfig()
     workspace: WorkspaceConfig = WorkspaceConfig()
     mineru: MinerUConfig = MinerUConfig()
     metadata_extraction: MetadataExtractionConfig = MetadataExtractionConfig()
+    standard_review: StandardReviewConfig = StandardReviewConfig()
     langsmith_project: str = "standard-document-assistant"
 
 
@@ -118,6 +131,7 @@ def load_config(path: Path | None = None) -> AssistantConfig:
     workspace_data = data.get("workspace", {})
     mineru_data = data.get("mineru", {})
     metadata_data = data.get("metadata_extraction", {})
+    review_data = data.get("standard_review", {})
     primary_data = data.get("models", {}).get("primary", {})
 
     runtime = RuntimeConfig(
@@ -208,12 +222,31 @@ def load_config(path: Path | None = None) -> AssistantConfig:
         timeout=int(metadata_model.get("timeout", MetadataExtractionConfig.timeout)),
         max_retries=int(metadata_model.get("max_retries", MetadataExtractionConfig.max_retries)),
     )
+    standard_review = StandardReviewConfig(
+        rules_md=review_data.get("rules_md", StandardReviewConfig.rules_md),
+        index_dir=review_data.get("index_dir", StandardReviewConfig.index_dir),
+        top_k=int(review_data.get("top_k", StandardReviewConfig.top_k)),
+        max_review_rounds=int(
+            review_data.get("max_review_rounds", StandardReviewConfig.max_review_rounds)
+        ),
+        write_artifacts=bool(
+            review_data.get("write_artifacts", StandardReviewConfig.write_artifacts)
+        ),
+        output_subdir=review_data.get("output_subdir", StandardReviewConfig.output_subdir),
+        enable_llm_review=bool(
+            review_data.get("enable_llm_review", StandardReviewConfig.enable_llm_review)
+        ),
+        scoped_text_max_chars=int(
+            review_data.get("scoped_text_max_chars", StandardReviewConfig.scoped_text_max_chars)
+        ),
+    )
     return AssistantConfig(
         runtime=runtime,
         primary_model=primary,
         workspace=workspace,
         mineru=mineru,
         metadata_extraction=metadata_extraction,
+        standard_review=standard_review,
         langsmith_project=os.getenv("LANGSMITH_PROJECT", runtime.app_name),
     )
 

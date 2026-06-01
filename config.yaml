@@ -25,6 +25,7 @@ workspace:
   max_upload_size_mb: 100
   allowed_upload_suffixes:
     - .pdf
+    - .docx
     - .md
     - .markdown
     - .txt
@@ -58,6 +59,16 @@ metadata_extraction:
     model: qwen-max
     timeout: 120
     max_retries: 2
+
+standard_review:
+  rules_md: src/standard_document_assistant/resources/review_rules/rules_test.md
+  index_dir: src/standard_document_assistant/resources/review_rules
+  top_k: 8
+  max_review_rounds: 2
+  write_artifacts: true
+  output_subdir: ""
+  enable_llm_review: false
+  scoped_text_max_chars: 12000
 
 memory:
   checkpointer: memory

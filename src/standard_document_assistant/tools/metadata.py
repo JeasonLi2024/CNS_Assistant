@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from langchain.tools import ToolRuntime
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import InjectedToolArg, StructuredTool
 
 from standard_document_assistant.config import load_config
 from standard_document_assistant.graphs.metadata_extraction.graph import (
@@ -161,7 +161,7 @@ async def _extract_standard_metadata_async(
     output_filename: str | None = None,
     write_artifacts: bool | None = None,
     cover_metadata_hint: dict[str, Any] | None = None,
-    runtime: ToolRuntime | None = None,
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     return await _arun_extraction(
         file_path=file_path,
@@ -182,7 +182,7 @@ def _extract_standard_metadata_sync(
     output_filename: str | None = None,
     write_artifacts: bool | None = None,
     cover_metadata_hint: dict[str, Any] | None = None,
-    runtime: ToolRuntime | None = None,
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     return _run_extraction(
         file_path=file_path,

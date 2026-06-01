@@ -1,14 +1,17 @@
-"""PDF parsing tool backed by MinerU."""
+"""Document parsing tool backed by MinerU."""
 
 from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from langchain.tools import ToolRuntime
+from langchain_core.tools import InjectedToolArg, StructuredTool
 
 from standard_document_assistant.config import load_config
 from standard_document_assistant.constants import SAMPLES_DIR, UPLOADS_DIR
-from standard_document_assistant.integrations.mineru.client import request_parse_pdf
+from standard_document_assistant.integrations.mineru.client import request_parse_file
 from standard_document_assistant.integrations.mineru.zip_parser import parse_result_zip
 from standard_document_assistant.pathing import (
     allocate_unique_path,
@@ -20,9 +23,25 @@ from standard_document_assistant.pathing import (
     write_json,
 )
 from standard_document_assistant.schemas import ArtifactManifest, ArtifactRef, MinerUParseResult
+from standard_document_assistant.tracing import (
+    PARSE_DOCUMENT_WITH_MINERU_TOOL_NAME,
+    PARSE_FILE_WITH_MINERU_TOOL_NAME,
+)
 
 
-def parse_pdf_with_mineru(
+SUPPORTED_MINERU_SUFFIXES = {".pdf", ".docx"}
+
+
+def _trace_metadata(*, runtime: ToolRuntime | None, file_path: str) -> dict[str, Any]:
+    extra: dict[str, Any] = {"source_virtual_path": file_path}
+    if runtime is not None:
+        configurable = (runtime.config or {}).get("configurable") or {}
+        if isinstance(configurable, dict) and configurable.get("thread_id"):
+            extra["thread_id"] = configurable["thread_id"]
+    return extra
+
+
+def _parse_file_with_mineru_sync(
     file_path: str,
     *,
     return_images: bool | None = None,
@@ -31,8 +50,9 @@ def parse_pdf_with_mineru(
     save_content_list: bool | None = None,
     skip_if_zip_exists: bool | None = None,
     output_subdir: str | None = None,
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
-    """Parse an uploaded PDF into Markdown and artifacts using MinerU."""
+    """Parse an uploaded PDF or Word document into Markdown and artifacts using MinerU."""
 
     started = time.perf_counter()
     config = load_config()
@@ -47,30 +67,30 @@ def parse_pdf_with_mineru(
         mineru_config.skip_if_zip_exists if skip_if_zip_exists is None else skip_if_zip_exists
     )
     output_root = mineru_output_root(output_subdir or mineru_config.output_subdir)
-    pdf_path, source_virtual = resolve_workspace_read_path(
+    source_path, source_virtual = resolve_workspace_read_path(
         file_path,
         allowed_roots=[UPLOADS_DIR, SAMPLES_DIR],
-        suffixes={".pdf"},
+        suffixes=SUPPORTED_MINERU_SUFFIXES,
     )
     max_bytes = mineru_config.max_pdf_size_mb * 1024 * 1024
-    if pdf_path.stat().st_size > max_bytes:
-        raise ValueError(f"PDF 超过大小限制：{mineru_config.max_pdf_size_mb}MB")
+    if source_path.stat().st_size > max_bytes:
+        raise ValueError(f"文件超过 MinerU 大小限制：{mineru_config.max_pdf_size_mb}MB")
 
     zip_dir = output_root / "zip"
-    zip_path = zip_dir / f"{safe_name(pdf_path.stem)}.zip"
+    zip_path = zip_dir / f"{safe_name(source_path.stem)}.zip"
     resumed = False
     if skip_if_zip_exists and zip_path.exists():
         zip_bytes = zip_path.read_bytes()
         resumed = True
     else:
-        zip_bytes = request_parse_pdf(pdf_path, mineru_config, return_images=return_images)
+        zip_bytes = request_parse_file(source_path, mineru_config, return_images=return_images)
         if save_zip_archive:
             zip_dir.mkdir(parents=True, exist_ok=True)
             zip_path.write_bytes(zip_bytes)
 
     parsed = parse_result_zip(
         zip_bytes=zip_bytes,
-        source_stem=pdf_path.stem,
+        source_stem=source_path.stem,
         output_root=output_root,
         return_images=return_images,
         save_middle_json=save_middle_json,
@@ -89,7 +109,7 @@ def parse_pdf_with_mineru(
         output_root / "manifests", safe_name(Path(parsed["md_path"]).stem) + "_parse_manifest", ".json"
     )
     manifest = ArtifactManifest(
-        tool="parse_pdf_with_mineru",
+        tool=PARSE_FILE_WITH_MINERU_TOOL_NAME,
         status="ok",
         source_virtual_path=source_virtual,
         primary_artifact=primary,
@@ -100,6 +120,7 @@ def parse_pdf_with_mineru(
     )
     manifest_payload = manifest.model_dump()
     manifest_payload["cover_metadata"] = parsed["cover_metadata"]
+    manifest_payload["trace"] = _trace_metadata(runtime=runtime, file_path=source_virtual)
     write_json(manifest_path, manifest_payload)
     result = MinerUParseResult(
         status="ok",
@@ -117,3 +138,28 @@ def parse_pdf_with_mineru(
     )
     return result.model_dump()
 
+
+parse_file_with_mineru = StructuredTool.from_function(
+    func=_parse_file_with_mineru_sync,
+    name=PARSE_FILE_WITH_MINERU_TOOL_NAME,
+    description=(
+        "Parse an uploaded PDF or Word standard document via MinerU into Markdown, "
+        "images, JSON sidecars, and a manifest under /workspace/output/mineru."
+    ),
+)
+
+parse_document_with_mineru = StructuredTool.from_function(
+    func=_parse_file_with_mineru_sync,
+    name=PARSE_DOCUMENT_WITH_MINERU_TOOL_NAME,
+    description=(
+        "Parse an uploaded PDF or Word standard document via MinerU into Markdown, "
+        "images, JSON sidecars, and a manifest under /workspace/output/mineru. "
+        "Use this standalone preprocessing tool before standard review."
+    ),
+)
+
+
+def parse_pdf_with_mineru(file_path: str, **kwargs: Any) -> dict[str, Any]:
+    """Backward-compatible wrapper for callers that still use the old Python function."""
+
+    return _parse_file_with_mineru_sync(file_path, **kwargs)
