@@ -108,13 +108,14 @@ def _parse_file_with_mineru_sync(
     manifest_path = allocate_unique_path(
         output_root / "manifests", safe_name(Path(parsed["md_path"]).stem) + "_parse_manifest", ".json"
     )
+    parse_warnings = list(parsed.get("warnings") or [])
     manifest = ArtifactManifest(
         tool=PARSE_FILE_WITH_MINERU_TOOL_NAME,
         status="ok",
         source_virtual_path=source_virtual,
         primary_artifact=primary,
         artifacts=artifacts,
-        warnings=[],
+        warnings=parse_warnings,
         error="",
         created_at=utc_now_iso(),
     )
@@ -132,7 +133,7 @@ def _parse_file_with_mineru_sync(
             host_to_virtual_path(parsed["image_root"]) + "/" if parsed.get("image_root") else ""
         ),
         cover_metadata=parsed["cover_metadata"],
-        warnings=[],
+        warnings=parse_warnings,
         duration_ms=int((time.perf_counter() - started) * 1000),
         resumed_from_zip=resumed,
     )

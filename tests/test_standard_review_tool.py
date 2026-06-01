@@ -1,5 +1,7 @@
 from io import BytesIO
+import json
 
+from standard_document_assistant.pathing import virtual_to_host_path
 from standard_document_assistant.tools import (
     run_format_source_review,
     run_standard_review,
@@ -102,8 +104,47 @@ def test_run_format_source_review_detects_docx_chapter_numbering() -> None:
 
     assert result["status"] == "success"
     assert result["summary"]["failed"] >= 1
+    result_payload = json.loads(
+        virtual_to_host_path(result["artifacts"]["result"]).read_text(encoding="utf-8")
+    )
+    assert any(item["rule_id"] == "DOCX-FMT-001" for item in result_payload["issues"])
+    assert result_payload["format_trace"]["evaluations"]
     validation = validate_review_result_schema.invoke({"result_path": result["artifacts"]["result"]})
     assert validation["valid"] is True
+
+
+def test_run_format_source_review_detects_pdf_chapter_numbering() -> None:
+    import fitz
+
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "1 范围", fontname="china-s", fontsize=12)
+    page.insert_text((72, 96), "本文件规定了测试要求。", fontname="china-s", fontsize=12)
+    page.insert_text((72, 120), "3 术语和定义", fontname="china-s", fontsize=12)
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+
+    record = save_uploaded_file(
+        original_filename="format-source.pdf",
+        thread_id="test-review",
+        content=pdf_bytes,
+    )
+
+    result = run_format_source_review.invoke(
+        {
+            "source_path": record.virtual_path,
+            "output_subdir": "test-review-pdf-format",
+            "trace_id": "trace-test-pdf-format",
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["summary"]["failed"] >= 1
+    result_payload = json.loads(
+        virtual_to_host_path(result["artifacts"]["result"]).read_text(encoding="utf-8")
+    )
+    assert any(item["rule_id"] == "DOCX-FMT-001" for item in result_payload["issues"])
+    assert result_payload["format_trace"]["source_type"] == "pdf"
 
 
 def test_review_tools_do_not_expose_runtime_in_schema() -> None:

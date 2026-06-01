@@ -90,6 +90,37 @@ class StandardMetadataExtraction(BaseModel):
     源文件: str = ""
 
 
+class PersistedArtifactRecord(BaseModel):
+    """A business artifact registered by the application layer for download/SSE."""
+
+    artifact_id: str = Field(description="产物唯一 ID，用于下载 URL")
+    thread_id: str = Field(description="所属 thread")
+    tool: str = Field(default="", description="生成该产物的工具名")
+    artifact_type: str = Field(description="产物类型")
+    description: str = Field(default="", description="产物说明")
+    virtual_path: str = Field(description="Deep Agents 虚拟路径")
+    source_virtual_path: str = Field(default="", description="源文件虚拟路径")
+    stored_filename: str = Field(description="保存后的文件名")
+    host_path: str = Field(description="宿主机路径，仅供应用层读文件")
+    suffix: str = Field(description="文件后缀")
+    size_bytes: int = Field(ge=0, description="文件大小")
+    sha256: str = Field(description="文件 SHA256")
+    content_type: str = Field(default="application/octet-stream", description="Content-Type")
+    download_url: str | None = Field(default=None, description="HTTP 下载地址")
+    created_at: str = Field(description="登记时间")
+
+
+class ArtifactDownload(BaseModel):
+    """How a persisted artifact can be downloaded or opened locally."""
+
+    artifact_id: str | None = Field(default=None, description="应用层登记后的产物 ID")
+    virtual_path: str = Field(description="Deep Agents 虚拟路径")
+    host_path: str = Field(description="宿主机绝对路径，本地调试可直接打开")
+    file_name: str = Field(description="文件名")
+    download_url: str | None = Field(default=None, description="HTTP 下载地址")
+    local_open_hint: str = Field(default="", description="本地访问提示")
+
+
 class MetadataExtractionResult(BaseModel):
     """Public result returned by extract_standard_metadata."""
 
@@ -97,8 +128,15 @@ class MetadataExtractionResult(BaseModel):
     source_virtual_path: str = ""
     virtual_output_path: str = ""
     virtual_manifest_path: str = ""
+    virtual_annotated_path: str = ""
+    virtual_normalized_path: str = ""
     aggregated_summary: dict[str, Any] = Field(default_factory=dict)
+    aggregated: dict[str, Any] = Field(default_factory=dict, description="完整聚合 JSON，供主 Agent 直接使用")
     validation: dict[str, Any] = Field(default_factory=dict)
+    quality_warnings: list[str] = Field(default_factory=list, description="抽取质量提醒，不自动改 JSON")
+    scoped_text_chars: int = 0
+    extracted_items: int = 0
+    download: ArtifactDownload | None = Field(default=None, description="主 JSON 产物下载信息")
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 

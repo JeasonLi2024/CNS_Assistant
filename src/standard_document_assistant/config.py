@@ -42,7 +42,14 @@ class WorkspaceConfig:
 
 @dataclass(frozen=True)
 class MinerUConfig:
+    api_mode: str = "local"
     api_base_url: str = ""
+    api_token: str = ""
+    precise_base_url: str = "https://mineru.net"
+    precise_model_version: str = "vlm"
+    precise_poll_interval: float = 3.0
+    precise_poll_timeout: int = 600
+    precise_extra_formats: tuple[str, ...] = ()
     request_timeout: int = 600
     max_pdf_size_mb: int = 100
     return_images: bool = True
@@ -72,9 +79,14 @@ class MetadataExtractionConfig:
     strict_validation: bool = False
     write_artifacts: bool = True
     model_provider: str = "dashscope-compatible"
-    model: str = "qwen-max"
+    model: str = "qwen3.5-flash"
+    base_url: str = ""
     timeout: int = 120
     max_retries: int = 2
+    batch_length: int = 40
+    max_workers: int = 20
+    max_char_buffer: int = 1000
+    extraction_passes: int = 1
 
 
 @dataclass(frozen=True)
@@ -119,6 +131,16 @@ def _read_yaml(path: Path) -> dict[str, Any]:
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
+
+
+def _csv_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(item.strip() for item in value.split(",") if item.strip())
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    return ()
 
 
 def load_config(path: Path | None = None) -> AssistantConfig:
@@ -170,7 +192,35 @@ def load_config(path: Path | None = None) -> AssistantConfig:
         ),
     )
     mineru = MinerUConfig(
+        api_mode=os.getenv("MINERU_API_MODE", mineru_data.get("api_mode", MinerUConfig.api_mode)),
         api_base_url=os.getenv("MINERU_API_BASE_URL", mineru_data.get("api_base_url", "")),
+        api_token=os.getenv("MINERU_API_TOKEN", mineru_data.get("api_token", "")),
+        precise_base_url=os.getenv(
+            "MINERU_PRECISE_BASE_URL",
+            mineru_data.get("precise_base_url", MinerUConfig.precise_base_url),
+        ),
+        precise_model_version=os.getenv(
+            "MINERU_PRECISE_MODEL_VERSION",
+            mineru_data.get("precise_model_version", MinerUConfig.precise_model_version),
+        ),
+        precise_poll_interval=float(
+            os.getenv(
+                "MINERU_PRECISE_POLL_INTERVAL",
+                mineru_data.get("precise_poll_interval", MinerUConfig.precise_poll_interval),
+            )
+        ),
+        precise_poll_timeout=int(
+            os.getenv(
+                "MINERU_PRECISE_POLL_TIMEOUT",
+                mineru_data.get("precise_poll_timeout", MinerUConfig.precise_poll_timeout),
+            )
+        ),
+        precise_extra_formats=_csv_tuple(
+            os.getenv(
+                "MINERU_PRECISE_EXTRA_FORMATS",
+                mineru_data.get("precise_extra_formats", MinerUConfig.precise_extra_formats),
+            )
+        ),
         request_timeout=int(
             os.getenv(
                 "MINERU_REQUEST_TIMEOUT",
@@ -219,8 +269,20 @@ def load_config(path: Path | None = None) -> AssistantConfig:
             "provider", MetadataExtractionConfig.model_provider
         ),
         model=metadata_model.get("model", MetadataExtractionConfig.model),
+        base_url=os.getenv(
+            "DASHSCOPE_BASE_URL",
+            metadata_model.get("base_url", MetadataExtractionConfig.base_url),
+        ),
         timeout=int(metadata_model.get("timeout", MetadataExtractionConfig.timeout)),
         max_retries=int(metadata_model.get("max_retries", MetadataExtractionConfig.max_retries)),
+        batch_length=int(metadata_model.get("batch_length", MetadataExtractionConfig.batch_length)),
+        max_workers=int(metadata_model.get("max_workers", MetadataExtractionConfig.max_workers)),
+        max_char_buffer=int(
+            metadata_model.get("max_char_buffer", MetadataExtractionConfig.max_char_buffer)
+        ),
+        extraction_passes=int(
+            metadata_model.get("extraction_passes", MetadataExtractionConfig.extraction_passes)
+        ),
     )
     standard_review = StandardReviewConfig(
         rules_md=review_data.get("rules_md", StandardReviewConfig.rules_md),

@@ -26,12 +26,50 @@ from standard_document_assistant.tools import (
 from standard_document_assistant.uploads import save_uploaded_file
 
 
+def _patch_langextract_for_smoke() -> None:
+    if os.getenv("DASHSCOPE_API_KEY"):
+        return
+    from types import SimpleNamespace
+
+    from standard_document_assistant.graphs.metadata_extraction import nodes as metadata_nodes
+
+    def _mock_result() -> SimpleNamespace:
+        return SimpleNamespace(
+            extractions=[
+                SimpleNamespace(
+                    extraction_class="标准号",
+                    extraction_text="GB/T 9999-2026",
+                    char_interval=SimpleNamespace(start_pos=1),
+                ),
+                SimpleNamespace(
+                    extraction_class="标准中文名称",
+                    extraction_text="数据质量管理规范",
+                    char_interval=SimpleNamespace(start_pos=2),
+                ),
+            ]
+        )
+
+    def _fake_save(**kwargs):
+        annotated_dir = kwargs["annotated_dir"]
+        normalized_dir = kwargs["normalized_dir"]
+        output_stem = kwargs["output_stem"]
+        annotated = annotated_dir / f"{output_stem}_extraction.jsonl"
+        normalized = normalized_dir / f"{output_stem}_extraction.json"
+        annotated.write_text("{}\n", encoding="utf-8")
+        normalized.write_text("{}", encoding="utf-8")
+        return {"annotated": annotated, "normalized": normalized}
+
+    metadata_nodes._traced_run_extraction = lambda _text: _mock_result()
+    metadata_nodes.save_langextract_outputs = _fake_save
+
+
 def assert_true(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
 
 
 def main() -> None:
+    _patch_langextract_for_smoke()
     record = save_uploaded_file(
         original_filename="sample_standard.md",
         thread_id="smoke",
@@ -63,6 +101,7 @@ TODO：补充质量评价指标。
     extracted = extract_standard_metadata.invoke({"file_path": record.virtual_path})
     assert_true(extracted["status"] == "ok", "元数据抽取应成功")
     assert_true(extracted["aggregated_summary"]["标准号"] == "GB/T 9999-2026", "应抽取标准号")
+    assert_true(extracted.get("download", {}).get("host_path"), "应返回本地下载路径")
     assert_true(extracted["virtual_output_path"], "应返回元数据 JSON 虚拟路径")
     assert_true(extracted["virtual_manifest_path"], "应返回 manifest 虚拟路径")
 

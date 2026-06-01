@@ -15,13 +15,20 @@ class MetadataExtractionState(TypedDict, total=False):
     write_artifacts: bool
     output_path: str
     output_virtual_path: str
+    annotated_path: str
+    annotated_virtual_path: str
+    normalized_path: str
+    normalized_virtual_path: str
     manifest_path: str
     manifest_virtual_path: str
     scoped_text: str
-    langextract_raw: Any
+    scoped_text_chars: int
+    langextract_result: Any
     aggregated: dict[str, Any]
     cover_metadata_hint: dict[str, Any]
     validation: dict[str, Any]
+    quality_warnings: Annotated[list[str], operator.add]
     errors: Annotated[list[str], operator.add]
     warnings: Annotated[list[str], operator.add]
     status: Literal["ok", "failed"]
+    extracted_items: int

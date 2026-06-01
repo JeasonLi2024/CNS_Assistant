@@ -15,9 +15,10 @@ SDK 实现在 `src/standard_document_assistant/`：
 
 - `agent.py`：`create_deep_agent()` 工厂、`CompositeBackend`、permissions、memory seed、subagents。
 - `tools/`：正式业务工具，包含 `parse_file_with_mineru`、`extract_standard_metadata`、schema 校验和记忆提案。
-- `graphs/metadata_extraction/`：元数据抽取 LangGraph 子图。
+- `graphs/metadata_extraction/`：元数据抽取 LangGraph 子图（langextract 切分、LLM 抽取、聚合落盘）。
 - `integrations/mineru/`：MinerU HTTP 和 ZIP 后处理集成。
-- `uploads.py`：应用层上传文件保存辅助函数。
+- `uploads.py`：应用层上传文件保存与 upload manifest。
+- `artifacts.py`：应用层产物登记、thread manifest 与下载元数据（对称 uploads）。
 - `schemas.py`：Pydantic 结构化输出。
 - `streaming.py`：Deep Agents stream update 到 SSE 事件的映射骨架。
 - `config.py`：`.env` 和 `config.yaml` 配置读取。
@@ -31,7 +32,24 @@ python.exe -m pip install -U pip
 python.exe -m pip install -e .[documents,mineru,dev]
 ```
 
-复制 `.env.example` 为 `.env`，填入 `DASHSCOPE_API_KEY`、`MINERU_API_BASE_URL` 和可选的 LangSmith 配置。
+复制 `.env.example` 为 `.env`，填入 `DASHSCOPE_API_KEY`、MinerU 配置和可选的 LangSmith 配置。
+
+MinerU 默认走自建服务：
+
+```powershell
+MINERU_API_MODE=local
+MINERU_API_BASE_URL=http://127.0.0.1:18001
+```
+
+如需使用 mineru.net 精准解析 API，改为：
+
+```powershell
+MINERU_API_MODE=precise
+MINERU_API_TOKEN=your_mineru_token
+MINERU_PRECISE_MODEL_VERSION=vlm
+```
+
+精准解析模式会申请签名上传 URL、PUT 上传本地文件、轮询批量解析结果并下载 `full_zip_url`。后续 ZIP 后处理仍复用本项目逻辑，Markdown、图片、ZIP 与 manifest 继续写入 `/workspace/output/mineru/`。
 
 ## 验证最小工具链
 
@@ -39,7 +57,22 @@ python.exe -m pip install -e .[documents,mineru,dev]
 python scripts\smoke_test.py
 ```
 
-该脚本会创建一个 Markdown 上传样本，验证上传保存、元数据抽取、manifest 写入、schema 校验和项目结构。生成文件位于 `workspace/output/metadata/`。
+该脚本会创建一个 Markdown 上传样本，验证上传保存、langextract 元数据抽取（无 `DASHSCOPE_API_KEY` 时使用 mock）、manifest 写入、schema 校验和项目结构。生成文件位于 `workspace/output/metadata/`。
+
+下载元数据 JSON（本地复制）：
+
+```powershell
+standard-doc-assistant --describe-artifact /workspace/output/metadata/json/your_metadata.json
+standard-doc-assistant --download-artifact /workspace/output/metadata/json/your_metadata.json --download-to .\metadata.json
+```
+
+若自建 HTTP 服务，可设置 `STANDARD_DOC_ARTIFACT_API_BASE`；登记后的下载地址形如 `/api/threads/{thread_id}/artifacts/{artifact_id}/download`。SSE 流会在产物登记后发送 `artifact.created` 事件。
+
+```powershell
+standard-doc-assistant --list-artifacts standard-doc-session-001
+standard-doc-assistant --describe-artifact /workspace/output/metadata/json/your_metadata.json
+standard-doc-assistant --download-artifact /workspace/output/metadata/json/your_metadata.json --download-to .\metadata.json
+```
 
 ## 检查 Deep Agent 配置
 
@@ -104,7 +137,7 @@ langgraph deploy --name standard-document-assistant
 
 ## 当前边界
 
-- PDF/Word 解析依赖外部 MinerU 服务，需要配置 `MINERU_API_BASE_URL`。
+- PDF/Word 解析依赖 MinerU：`local` 模式需要配置 `MINERU_API_BASE_URL`；`precise` 模式需要配置 `MINERU_API_TOKEN`，并会把文件上传到 mineru.net 精准解析 API。
 - 正式参考检索、正式审核报告工具、正式起草工具尚未接入。
 - `vision_parser` 暂不启用，后续需要单独设计视觉/OCR 边界。
 - SSE 和审批接口已提供代码骨架，尚未绑定具体 Web 框架。

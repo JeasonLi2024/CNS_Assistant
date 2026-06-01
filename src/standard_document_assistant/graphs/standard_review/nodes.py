@@ -22,7 +22,10 @@ from standard_document_assistant.pathing import (
 )
 from standard_document_assistant.review_core.reporter import render_markdown_report
 from standard_document_assistant.review_core.format_audit import run_format_source_audit
+from standard_document_assistant.review_core.pdf_format_parser import parse_pdf_format_file
 from standard_document_assistant.review_core.rules import load_review_rules
+from standard_document_assistant.review_core.rule_models import AuditIssue
+from standard_document_assistant.review_core.word_parser import parse_word_file
 from standard_document_assistant.schemas import ArtifactManifest, ArtifactRef, ReviewIssue
 from standard_document_assistant.tracing import STANDARD_REVIEW_TOOL_NAME
 
@@ -203,7 +206,56 @@ def format_review(state: StandardReviewState) -> dict[str, Any]:
         allowed_roots=[UPLOADS_DIR, OUTPUT_DIR],
         suffixes={".pdf", ".docx"},
     )
-    issues, format_trace, warnings = run_format_source_audit(source_host, source_virtual)
+    try:
+        if suffix == ".docx":
+            document = parse_word_file(str(source_host))
+        else:
+            document = parse_pdf_format_file(str(source_host))
+        source_issues, format_trace = run_format_source_audit(document)
+        issues = [
+            _source_audit_issue_to_review_issue(item, source_virtual).model_dump()
+            for item in source_issues
+        ]
+        if not issues and int(format_trace.get("facts_total") or 0) == 0:
+            issues = [
+                ReviewIssue(
+                    issue_id="FMT-SOURCE-INFO",
+                    rule_id="FMT-SOURCE-000",
+                    rule_name="格式轨审核依据不足",
+                    scope="full_document",
+                    audit_track="format_source",
+                    severity="info",
+                    status="insufficient_context",
+                    expected="格式轨应基于原始 DOCX/PDF 的结构化格式事实执行确定性检查。",
+                    actual="未从源文件抽取到格式事实。",
+                    evidence_text=source_virtual,
+                    source_ref="format_source::availability",
+                    suggestion="确认 DOCX/PDF 具有可识别标题、段落和可复制文字层。",
+                    confidence=0.0,
+                    llm_reasoning="源解析没有产生格式事实，未调用 LLM。",
+                ).model_dump()
+            ]
+        warnings: list[str] = []
+    except Exception as exc:
+        issue = ReviewIssue(
+            issue_id="FMT-SOURCE-INFO",
+            rule_id="FMT-SOURCE-000",
+            rule_name="格式轨审核依据不足",
+            scope="full_document",
+            audit_track="format_source",
+            severity="info",
+            status="insufficient_context",
+            expected="格式轨应基于原始 DOCX/PDF 的结构化格式事实执行确定性检查。",
+            actual=str(exc),
+            evidence_text=source_virtual,
+            source_ref="format_source::availability",
+            suggestion="确认源文件可读取；PDF 需具备可复制文字层并安装 pymupdf，DOCX 需安装 python-docx/lxml。",
+            confidence=0.0,
+            llm_reasoning="未获得足够格式事实，未调用 LLM。",
+        )
+        issues = [issue.model_dump()]
+        warnings = [str(exc)]
+        format_trace = {"enabled": False, "source_type": suffix.lstrip("."), "error": str(exc)}
     return {
         "issues": issues,
         "warnings": warnings,
@@ -407,6 +459,41 @@ def _evaluate_content_rule(
         llm_reasoning="P0 框架使用确定性章节存在性检查，尚未启用 LLM 内容判定。",
     )
     return issue.model_dump()
+
+
+def _source_audit_issue_to_review_issue(issue: AuditIssue, source_virtual: str) -> ReviewIssue:
+    severity_map = {
+        "严重": "critical",
+        "重度": "critical",
+        "中度": "major",
+        "轻度": "minor",
+        "提示": "info",
+        "warn": "minor",
+    }
+    status = issue.status
+    if status == "not_ready":
+        status = "insufficient_context"
+    if status not in {"pass", "fail", "warn", "insufficient_context", "llm_error"}:
+        status = "warn"
+    evidence = issue.evidence_text or ""
+    if source_virtual and not evidence.startswith(source_virtual):
+        evidence = f"{source_virtual} | {evidence}".strip()
+    return ReviewIssue(
+        issue_id=issue.issue_id,
+        rule_id=issue.rule_id,
+        rule_name=issue.rule_name,
+        scope=issue.scope,
+        audit_track="format_source",
+        severity=severity_map.get(issue.severity, "major"),  # type: ignore[arg-type]
+        status=status,  # type: ignore[arg-type]
+        expected=issue.expected,
+        actual=issue.actual,
+        evidence_text=evidence[:1000],
+        source_ref=issue.source_ref,
+        suggestion=issue.suggestion,
+        confidence=issue.confidence,
+        llm_reasoning=issue.llm_reasoning,
+    )
 
 
 def _event(

@@ -31,6 +31,14 @@ workspace:
     - .txt
 
 mineru:
+  # local: 兼容自建 MinerU /file_parse；precise: mineru.net 精准解析 API。
+  api_mode: local
+  api_base_url: ""
+  precise_base_url: https://mineru.net
+  precise_model_version: vlm
+  precise_poll_interval: 3
+  precise_poll_timeout: 600
+  precise_extra_formats: []
   request_timeout: 600
   max_pdf_size_mb: 100
   return_images: true
@@ -56,9 +64,14 @@ metadata_extraction:
   write_artifacts: true
   model:
     provider: dashscope-compatible
-    model: qwen-max
+    model: qwen3.5-flash
+    base_url: ""
     timeout: 120
     max_retries: 2
+    batch_length: 40
+    max_workers: 20
+    max_char_buffer: 1000
+    extraction_passes: 1
 
 standard_review:
   rules_md: src/standard_document_assistant/resources/review_rules/rules_test.md
