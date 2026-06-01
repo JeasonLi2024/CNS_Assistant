@@ -1,0 +1,69 @@
+app:
+  name: standard-document-assistant
+  default_language: zh-CN
+
+models:
+  primary:
+    provider: qwen
+    class: langchain_qwq.ChatQwen
+    model: qwen3.7-max
+    temperature: 0
+    max_tokens: 8000
+    timeout: 60
+    max_retries: 2
+
+runtime:
+  streaming: true
+  transport: sse
+  require_human_approval: true
+  default_thread_prefix: standard-doc
+
+workspace:
+  uploads_dir: workspace/input/uploads
+  output_dir: workspace/output
+  tmp_dir: workspace/tmp
+  max_upload_size_mb: 100
+  allowed_upload_suffixes:
+    - .pdf
+    - .md
+    - .markdown
+    - .txt
+
+mineru:
+  request_timeout: 600
+  max_pdf_size_mb: 100
+  return_images: true
+  save_zip_archive: true
+  save_middle_json: false
+  save_content_list: false
+  skip_if_zip_exists: true
+  output_subdir: ""
+  request_options:
+    backend: pipeline
+    lang_list: ch
+    parse_method: auto
+    formula_enable: "true"
+    table_enable: "true"
+    return_middle_json: "true"
+    return_content_list: "true"
+    response_format_zip: "true"
+
+metadata_extraction:
+  default_scope_mode: metadata
+  scoped_text_max_bytes: 524288
+  strict_validation: false
+  write_artifacts: true
+  model:
+    provider: dashscope-compatible
+    model: qwen-max
+    timeout: 120
+    max_retries: 2
+
+memory:
+  checkpointer: memory
+  store: inmemory
+  agent_memory_namespace: standard-document-assistant
+  routes:
+    short_term: state
+    workspace: filesystem
+    long_term: store

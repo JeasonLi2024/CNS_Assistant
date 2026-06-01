@@ -1,0 +1,25 @@
+{
+  "tools": [
+    {
+      "name": "parse_pdf_with_mineru",
+      "description": "Parse an uploaded PDF standard document via MinerU into Markdown, images, JSON sidecars, and a manifest under /workspace/output/mineru."
+    },
+    {
+      "name": "extract_standard_metadata",
+      "description": "Extract standard metadata fields from Markdown using a LangGraph metadata extraction subgraph."
+    },
+    {
+      "name": "validate_output_schema",
+      "description": "Validate structured outputs against supported Pydantic schemas."
+    },
+    {
+      "name": "propose_memory_update",
+      "description": "Create a human-reviewable memory update proposal without writing memory directly."
+    }
+  ],
+  "interrupt_config": {
+    "parse_pdf_with_mineru": true,
+    "extract_standard_metadata": true,
+    "propose_memory_update": true
+  }
+}

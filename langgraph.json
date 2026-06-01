@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./agent.py:agent",
+    "metadata_extraction": "./metadata_extraction_graph.py:metadata_extraction"
+  },
+  "env": ".env",
+  "python_version": "3.12"
+}
