@@ -62,6 +62,8 @@ def _request_precise_parse_file(file_path: Path, config: MinerUConfig) -> bytes:
 
     if not config.api_token:
         raise RuntimeError("缺少 MINERU_API_TOKEN，无法调用 MinerU 精准解析 API。")
+    if not config.precise_base_url:
+        raise RuntimeError("缺少 MINERU_PRECISE_BASE_URL，无法调用 MinerU 精准解析 API。")
     try:
         import requests
     except ImportError as exc:
@@ -185,7 +187,7 @@ def _poll_precise_zip_url(
             return zip_url
         if state == "failed":
             raise RuntimeError(f"MinerU 精准解析失败：{result.get('err_msg') or payload}")
-        time.sleep(max(config.precise_poll_interval, 0.1))
+        time.sleep(max(config.precise_poll_interval or 1.0, 0.1))
     raise TimeoutError(
         f"MinerU 精准解析轮询超时：batch_id={batch_id}, last_state={last_state}, last_payload={last_payload}"
     )
