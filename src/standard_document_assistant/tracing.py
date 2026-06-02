@@ -15,6 +15,7 @@ STANDARD_REVIEW_TOOL_NAME = "run_standard_review"
 FORMAT_SOURCE_REVIEW_TOOL_NAME = "run_format_source_review"
 INSPECT_REVIEW_RULES_TOOL_NAME = "inspect_review_rules"
 VALIDATE_REVIEW_RESULT_TOOL_NAME = "validate_review_result_schema"
+BUILD_REVIEW_INDEX_TOOL_NAME = "build_review_index"
 
 
 def _parent_agent_name(parent_config: RunnableConfig | None) -> str | None:

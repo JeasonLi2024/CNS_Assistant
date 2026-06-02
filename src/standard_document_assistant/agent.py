@@ -31,6 +31,7 @@ from standard_document_assistant.prompts import (
 )
 from standard_document_assistant.schemas import AgentResult
 from standard_document_assistant.tools import (
+    build_review_index,
     extract_standard_metadata,
     inspect_review_rules,
     parse_document_with_mineru,
@@ -286,6 +287,7 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
             run_standard_review,
             run_format_source_review,
             inspect_review_rules,
+            build_review_index,
             validate_review_result_schema,
         ],
         "skills": [review_skill],
@@ -295,6 +297,7 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
             "parse_document_with_mineru": True,
             "run_standard_review": True,
             "run_format_source_review": True,
+            "build_review_index": True,
         }
 
     return [
@@ -379,6 +382,7 @@ def build_standard_document_agent(*, strict_model: bool = False, langgraph_serve
             "extract_standard_metadata": True,
             "run_standard_review": True,
             "run_format_source_review": True,
+            "build_review_index": True,
             "propose_memory_update": True,
             "execute": True,
         }

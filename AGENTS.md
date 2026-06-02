@@ -10,7 +10,8 @@
 - 文档审核优先走：解析 -> 信息抽取 -> 审核 -> 报告生成。
 - 文档生成优先走：澄清需求 -> 检索参考 -> 结构规划 -> 草稿生成 -> 自检。
 - 大文本解析、检索、审核、草稿撰写等任务应委派给对应 subagent，主 Agent 只接收摘要、结论和产物路径。
-- 单文件元数据抽取应直接委派 extractor：当输入已经是 Markdown 或 MinerU Markdown 路径时，主 Agent 不得先读取全文、不得读取 extraction skill、不得为了简单抽取任务调用 `write_todos`。
+- PDF/Word 元数据抽取：先委派 parser（`parse_file_with_mineru`）得到 `virtual_md_path` 与 `cover_metadata`，再委派 extractor（`extract_standard_metadata`）。
+- 输入已是 Markdown 或 MinerU Markdown 路径时，直接委派 extractor；不得先读取全文、不得读取 extraction skill、不得为简单抽取调用 `write_todos`。
 - 调用内置文件工具时必须使用 Deep Agents 虚拟路径（如 `/workspace/`、`/memories/`、`/skills/`），不得使用 Windows 盘符路径或项目根目录路径。
 
 ## 安全约束

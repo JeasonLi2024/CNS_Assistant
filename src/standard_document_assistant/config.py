@@ -97,8 +97,39 @@ class StandardReviewConfig:
     max_review_rounds: int = 2
     write_artifacts: bool = True
     output_subdir: str = ""
-    enable_llm_review: bool = False
+    enable_llm_review: bool = True
     scoped_text_max_chars: int = 12000
+    judge_provider: str = "dashscope-compatible"
+    judge_model: str = "qwen3.5-flash"
+    judge_base_url: str = ""
+    judge_api_key_env: str = "DASHSCOPE_API_KEY"
+    judge_temperature: float = 0.0
+    judge_max_tokens: int = 2048
+    judge_timeout: int = 60
+    judge_max_retries: int = 2
+    judge_max_workers: int = 4
+    embedding_provider: str = "dashscope"
+    embedding_model: str = "text-embedding-v3"
+    embedding_base_url: str = ""
+    embedding_dim: int = 1024
+    embedding_api_key_env: str = "DASHSCOPE_API_KEY"
+    local_context_max_chars: int = 2200
+    cross_section_max_chars: int = 3200
+    window_max_chars: int = 2200
+    window_overlap_chars: int = 160
+    full_document_single_chars: int = 2200
+    batch_window_max_rules: int = 4
+    batch_window_max_chars: int = 3600
+    batch_scope_max_rules: int = 4
+    batch_scope_max_chars: int = 3600
+    min_context_chars_local: int = 40
+    min_context_chars_cross_section: int = 120
+    min_context_chars_full_document: int = 400
+    low_confidence_floor: float = 0.35
+    auto_rebuild_index: bool = True
+    enable_audit_summary: bool = True
+    summary_model: str = "qwen3.5-flash"
+    summary_max_chars: int = 600
 
 
 @dataclass(frozen=True)
@@ -300,6 +331,113 @@ def load_config(path: Path | None = None) -> AssistantConfig:
         ),
         scoped_text_max_chars=int(
             review_data.get("scoped_text_max_chars", StandardReviewConfig.scoped_text_max_chars)
+        ),
+        judge_provider=review_data.get("judge_provider", StandardReviewConfig.judge_provider),
+        judge_model=os.getenv(
+            "DASHSCOPE_JUDGE_MODEL",
+            review_data.get("judge_model", StandardReviewConfig.judge_model),
+        ),
+        judge_base_url=os.getenv(
+            "DASHSCOPE_BASE_URL",
+            review_data.get("judge_base_url", StandardReviewConfig.judge_base_url),
+        ),
+        judge_api_key_env=review_data.get(
+            "judge_api_key_env", StandardReviewConfig.judge_api_key_env
+        ),
+        judge_temperature=float(
+            review_data.get("judge_temperature", StandardReviewConfig.judge_temperature)
+        ),
+        judge_max_tokens=int(
+            review_data.get("judge_max_tokens", StandardReviewConfig.judge_max_tokens)
+        ),
+        judge_timeout=int(
+            review_data.get("judge_timeout", StandardReviewConfig.judge_timeout)
+        ),
+        judge_max_retries=int(
+            review_data.get("judge_max_retries", StandardReviewConfig.judge_max_retries)
+        ),
+        judge_max_workers=int(
+            review_data.get("judge_max_workers", StandardReviewConfig.judge_max_workers)
+        ),
+        embedding_provider=review_data.get(
+            "embedding_provider", StandardReviewConfig.embedding_provider
+        ),
+        embedding_model=os.getenv(
+            "DASHSCOPE_EMBEDDING_MODEL",
+            review_data.get("embedding_model", StandardReviewConfig.embedding_model),
+        ),
+        embedding_base_url=os.getenv(
+            "DASHSCOPE_BASE_URL",
+            review_data.get("embedding_base_url", StandardReviewConfig.embedding_base_url),
+        ),
+        embedding_dim=int(
+            review_data.get("embedding_dim", StandardReviewConfig.embedding_dim)
+        ),
+        embedding_api_key_env=review_data.get(
+            "embedding_api_key_env", StandardReviewConfig.embedding_api_key_env
+        ),
+        local_context_max_chars=int(
+            review_data.get(
+                "local_context_max_chars", StandardReviewConfig.local_context_max_chars
+            )
+        ),
+        cross_section_max_chars=int(
+            review_data.get(
+                "cross_section_max_chars", StandardReviewConfig.cross_section_max_chars
+            )
+        ),
+        window_max_chars=int(
+            review_data.get("window_max_chars", StandardReviewConfig.window_max_chars)
+        ),
+        window_overlap_chars=int(
+            review_data.get("window_overlap_chars", StandardReviewConfig.window_overlap_chars)
+        ),
+        full_document_single_chars=int(
+            review_data.get(
+                "full_document_single_chars", StandardReviewConfig.full_document_single_chars
+            )
+        ),
+        batch_window_max_rules=int(
+            review_data.get("batch_window_max_rules", StandardReviewConfig.batch_window_max_rules)
+        ),
+        batch_window_max_chars=int(
+            review_data.get("batch_window_max_chars", StandardReviewConfig.batch_window_max_chars)
+        ),
+        batch_scope_max_rules=int(
+            review_data.get("batch_scope_max_rules", StandardReviewConfig.batch_scope_max_rules)
+        ),
+        batch_scope_max_chars=int(
+            review_data.get("batch_scope_max_chars", StandardReviewConfig.batch_scope_max_chars)
+        ),
+        min_context_chars_local=int(
+            review_data.get(
+                "min_context_chars_local", StandardReviewConfig.min_context_chars_local
+            )
+        ),
+        min_context_chars_cross_section=int(
+            review_data.get(
+                "min_context_chars_cross_section",
+                StandardReviewConfig.min_context_chars_cross_section,
+            )
+        ),
+        min_context_chars_full_document=int(
+            review_data.get(
+                "min_context_chars_full_document",
+                StandardReviewConfig.min_context_chars_full_document,
+            )
+        ),
+        low_confidence_floor=float(
+            review_data.get("low_confidence_floor", StandardReviewConfig.low_confidence_floor)
+        ),
+        auto_rebuild_index=bool(
+            review_data.get("auto_rebuild_index", StandardReviewConfig.auto_rebuild_index)
+        ),
+        enable_audit_summary=bool(
+            review_data.get("enable_audit_summary", StandardReviewConfig.enable_audit_summary)
+        ),
+        summary_model=review_data.get("summary_model", StandardReviewConfig.summary_model),
+        summary_max_chars=int(
+            review_data.get("summary_max_chars", StandardReviewConfig.summary_max_chars)
         ),
     )
     return AssistantConfig(

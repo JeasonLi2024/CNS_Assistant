@@ -1,4 +1,4 @@
-"""Standard review tools."""
+"""Standard review tools (Deep Agents integration)."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from pydantic import ValidationError
 from standard_document_assistant.config import load_config
 from standard_document_assistant.graphs.standard_review.graph import get_standard_review_graph
 from standard_document_assistant.pathing import resolve_workspace_read_path
-from standard_document_assistant.review_core.rules import load_review_rules
 from standard_document_assistant.schemas import ReviewIssue, ReviewSummary, ReviewToolResult
 from standard_document_assistant.tracing import (
+    BUILD_REVIEW_INDEX_TOOL_NAME,
     FORMAT_SOURCE_REVIEW_TOOL_NAME,
     INSPECT_REVIEW_RULES_TOOL_NAME,
     STANDARD_REVIEW_GRAPH_NAME,
@@ -23,6 +23,8 @@ from standard_document_assistant.tracing import (
     VALIDATE_REVIEW_RESULT_TOOL_NAME,
     invoke_traced_graph,
 )
+from standard_document_assistant.review_core.knowledge_base import load_knowledge_base
+from standard_document_assistant.review_core.rule_models import RetrievalHit
 
 
 def _build_initial_state(
@@ -37,6 +39,8 @@ def _build_initial_state(
     format_only: bool,
     output_subdir: str | None,
     trace_id: str | None,
+    force_rebuild_index: bool | None,
+    partial_mode: str | None,
 ) -> dict[str, Any]:
     config = load_config()
     job_id = output_subdir or uuid.uuid4().hex[:12]
@@ -52,6 +56,8 @@ def _build_initial_state(
         "top_k": top_k or config.standard_review.top_k,
         "format_only": format_only,
         "output_subdir": output_subdir or job_id,
+        "force_rebuild_index": bool(force_rebuild_index) if force_rebuild_index is not None else False,
+        "partial_mode": partial_mode or "sectional",
         "issues": [],
         "warnings": [],
         "errors": [],
@@ -75,7 +81,11 @@ def _public_result(result: dict[str, Any]) -> dict[str, Any]:
         warnings=result.get("warnings", []),
         error="; ".join(result.get("errors", [])),
     )
-    return payload.model_dump()
+    public = payload.model_dump()
+    public["scope_summary"] = result.get("scope_summary") or {}
+    public["audit_summary"] = result.get("audit_summary") or {}
+    public["retrieval_trace"] = result.get("retrieval_trace") or []
+    return public
 
 
 def _trace_metadata(
@@ -111,9 +121,11 @@ def _run_standard_review_sync(
     format_only: bool = False,
     output_subdir: str | None = None,
     trace_id: str | None = None,
+    force_rebuild_index: bool | None = None,
+    partial_mode: str | None = None,
     runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
-    """Run the standard review LangGraph and persist report/result/trace/manifest."""
+    """Run the standard review graph and persist report/result/trace/manifest."""
 
     state = _build_initial_state(
         content_path=content_path,
@@ -126,6 +138,8 @@ def _run_standard_review_sync(
         format_only=format_only,
         output_subdir=output_subdir,
         trace_id=trace_id,
+        force_rebuild_index=force_rebuild_index,
+        partial_mode=partial_mode,
     )
     graph = get_standard_review_graph()
     parent_config = runtime.config if runtime is not None else None
@@ -170,23 +184,80 @@ def _inspect_review_rules_sync(
     top_k: int = 5,
     trace_id: str | None = None,
 ) -> dict[str, Any]:
-    rules, metadata = load_review_rules()
-    query_terms = {item for item in query.lower().split() if item}
-    matches = []
-    for rule in rules:
-        if scope and rule.get("scope") != scope:
-            continue
-        haystack = f"{rule.get('rule_name', '')}\n{rule.get('text', '')}".lower()
-        score = sum(1 for term in query_terms if term in haystack)
-        if query and query in haystack:
-            score += 3
-        matches.append({**rule, "score": score})
-    matches.sort(key=lambda item: item.get("score", 0), reverse=True)
+    """Inspect review rules using the FAISS/TF-IDF knowledge base.
+
+    Falls back to a keyword ranker if the index is unavailable so the tool
+    remains useful in low-resource environments.
+    """
+
+    config = load_config().standard_review
+    try:
+        kb, kb_meta = load_knowledge_base(config)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "trace_id": trace_id or "",
+            "error": f"知识库加载失败：{exc}",
+            "matches": [],
+        }
+    hits: list[RetrievalHit] = []
+    if kb.index is not None:
+        try:
+            hits = kb.search(query, scope=scope, top_k=top_k)
+        except Exception:
+            hits = []
+    if not hits:
+        query_terms = {token for token in query.lower().split() if token}
+        for rule in kb.rules:
+            if scope and rule.scope != scope:
+                continue
+            haystack = f"{rule.title}\n{rule.content}\n{rule.scope}".lower()
+            if query and any(term in haystack for term in query_terms):
+                hits.append(RetrievalHit(rule=rule, score=0.5, source="keyword", vector_score=0.0))
+    matches = [
+        {
+            "chunk_id": hit.rule.chunk_id,
+            "rule_id": hit.rule.chunk_id,
+            "rule_name": hit.rule.title,
+            "scope": hit.rule.scope,
+            "text": hit.rule.content,
+            "source_ref": hit.rule.source_ref,
+            "tags": list(hit.rule.tags),
+            "analysis_mode": hit.rule.analysis_mode,
+            "target_scopes": list(hit.rule.target_scopes),
+            "score": hit.score,
+            "source": hit.source,
+        }
+        for hit in hits[:top_k]
+    ]
     return {
         "status": "ok",
         "trace_id": trace_id or "",
-        "rules_metadata": metadata,
-        "matches": matches[:top_k],
+        "rules_metadata": kb_meta,
+        "matches": matches,
+    }
+
+
+def _build_review_index_sync(
+    *,
+    trace_id: str | None = None,
+    force_rebuild: bool = True,
+) -> dict[str, Any]:
+    config = load_config().standard_review
+    try:
+        kb, kb_meta = load_knowledge_base(config, force_rebuild=force_rebuild)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "trace_id": trace_id or "",
+            "error": f"索引构建失败：{exc}",
+        }
+    return {
+        "status": "ok",
+        "trace_id": trace_id or "",
+        "rules_metadata": kb_meta,
+        "rules_loaded": len(kb.rules),
+        "index_source": kb_meta.get("index_source", "rebuilt"),
     }
 
 
@@ -213,6 +284,12 @@ def _validate_review_result_schema_sync(
         for key in ["report", "result", "trace", "manifest"]:
             if key in artifacts and not str(artifacts[key]).startswith("/workspace/"):
                 errors.append(f"artifact {key} 不是 /workspace/ 虚拟路径。")
+    scope_summary = data.get("scope_summary") or {}
+    if scope_summary and not isinstance(scope_summary, dict):
+        errors.append("scope_summary 必须是 dict。")
+    audit_summary = data.get("audit_summary") or {}
+    if audit_summary and not isinstance(audit_summary, dict):
+        errors.append("audit_summary 必须是 dict。")
     return {
         "valid": not errors,
         "trace_id": trace_id or data.get("trace_id", ""),
@@ -227,7 +304,9 @@ run_standard_review = StructuredTool.from_function(
     name=STANDARD_REVIEW_TOOL_NAME,
     description=(
         "Run standard document review from MinerU Markdown, optional source file, "
-        "or MinerU manifest. Writes report/result/trace/manifest under /workspace/output/reviews."
+        "or MinerU manifest. Uses FAISS RAG + LLM Judge (multi-strategy) for the "
+        "content track and deterministic DOCX/PDF checks for the format track. "
+        "Writes report/result/trace/manifest under /workspace/output/reviews."
     ),
 )
 
@@ -240,7 +319,21 @@ run_format_source_review = StructuredTool.from_function(
 inspect_review_rules = StructuredTool.from_function(
     func=_inspect_review_rules_sync,
     name=INSPECT_REVIEW_RULES_TOOL_NAME,
-    description="Inspect review rules by query and scope without making formal audit judgments.",
+    description=(
+        "Inspect review rules by query and scope using the FAISS/TF-IDF knowledge base. "
+        "Use this to preview which rules will be evaluated for a given scope before "
+        "running the full review."
+    ),
+)
+
+build_review_index = StructuredTool.from_function(
+    func=_build_review_index_sync,
+    name=BUILD_REVIEW_INDEX_TOOL_NAME,
+    description=(
+        "Build (or rebuild) the FAISS/TF-IDF review-rules vector index from the "
+        "configured rules markdown. Required after editing rules_test.md or when "
+        "switching the embedding model."
+    ),
 )
 
 validate_review_result_schema = StructuredTool.from_function(

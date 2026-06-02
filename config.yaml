@@ -80,7 +80,7 @@ standard_review:
   max_review_rounds: 2
   write_artifacts: true
   output_subdir: ""
-  enable_llm_review: false
+  enable_llm_review: true
   scoped_text_max_chars: 12000
 
 memory:

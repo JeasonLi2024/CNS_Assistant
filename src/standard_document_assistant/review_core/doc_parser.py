@@ -102,6 +102,17 @@ def parse_markdown_text(raw: str, *, file_name: str) -> ParsedMarkdownDocument:
     )
 
 
+def parse_markdown_document(
+    raw: str, *, file_name: str, raw_view: str | None = None
+) -> ParsedMarkdownDocument:
+    """Alias that lets callers pass a pre-computed ``raw_view`` for ``text_view``."""
+
+    doc = parse_markdown_text(raw, file_name=file_name)
+    if raw_view is not None:
+        doc.text_view = raw_view
+    return doc
+
+
 def _find_toc_start(lines: List[str]) -> int:
     for i, line in enumerate(lines):
         content = _heading_content(line)

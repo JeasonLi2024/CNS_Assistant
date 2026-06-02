@@ -3,6 +3,7 @@
 from standard_document_assistant.tools.metadata import extract_standard_metadata
 from standard_document_assistant.tools.parser import parse_document_with_mineru, parse_file_with_mineru
 from standard_document_assistant.tools.review import (
+    build_review_index,
     inspect_review_rules,
     run_format_source_review,
     run_standard_review,
@@ -20,6 +21,7 @@ REVIEW_TOOLS = [
     run_standard_review,
     run_format_source_review,
     inspect_review_rules,
+    build_review_index,
     validate_review_result_schema,
 ]
 STANDARD_DOCUMENT_TOOLS = [
@@ -32,6 +34,7 @@ __all__ = [
     "METADATA_TOOLS",
     "REVIEW_TOOLS",
     "STANDARD_DOCUMENT_TOOLS",
+    "build_review_index",
     "extract_standard_metadata",
     "inspect_review_rules",
     "parse_document_with_mineru",

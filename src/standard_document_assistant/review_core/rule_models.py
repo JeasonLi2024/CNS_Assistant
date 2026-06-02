@@ -65,9 +65,11 @@ class AuditIssue:
     confidence: float = 1.0
     # 来自 LLM JSON 的 reasoning：规则与证据的对照推理（简要说明）
     llm_reasoning: str = ""
+    extras: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
-        return asdict(self)
+        data = asdict(self)
+        return data
 
 
 @dataclass
