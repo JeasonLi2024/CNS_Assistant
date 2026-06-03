@@ -9,7 +9,6 @@ from langchain_core.runnables import RunnableConfig
 METADATA_EXTRACTION_GRAPH_NAME = "metadata_extraction"
 METADATA_EXTRACTION_TOOL_NAME = "extract_standard_metadata"
 PARSE_FILE_WITH_MINERU_TOOL_NAME = "parse_file_with_mineru"
-PARSE_DOCUMENT_WITH_MINERU_TOOL_NAME = "parse_document_with_mineru"
 STANDARD_REVIEW_GRAPH_NAME = "standard_review"
 STANDARD_REVIEW_TOOL_NAME = "run_standard_review"
 FORMAT_SOURCE_REVIEW_TOOL_NAME = "run_format_source_review"
@@ -76,8 +75,13 @@ def invoke_traced_graph(
     tool_name: str = METADATA_EXTRACTION_TOOL_NAME,
     tool_call_id: str | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Invoke a compiled LangGraph subgraph with parent tracing context."""
+    """Invoke a compiled LangGraph subgraph with parent tracing context.
+
+    ``context`` 透传给 ``graph.invoke(..., context=context)``，配合子图
+    ``compile(context_schema=...)`` 使用（Deep Agents Runtime context 模式）。
+    """
 
     config = build_subgraph_runnable_config(
         parent_config,
@@ -86,6 +90,8 @@ def invoke_traced_graph(
         tool_call_id=tool_call_id,
         extra_metadata=extra_metadata,
     )
+    if context is not None:
+        return graph.invoke(state, config=config, context=context)
     return graph.invoke(state, config=config)
 
 
@@ -98,8 +104,12 @@ async def ainvoke_traced_graph(
     tool_name: str = METADATA_EXTRACTION_TOOL_NAME,
     tool_call_id: str | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Async variant of :func:`invoke_traced_graph`."""
+    """Async variant of :func:`invoke_traced_graph`.
+
+    ``context`` 透传给 ``graph.ainvoke(..., context=context)``。
+    """
 
     config = build_subgraph_runnable_config(
         parent_config,
@@ -108,4 +118,6 @@ async def ainvoke_traced_graph(
         tool_call_id=tool_call_id,
         extra_metadata=extra_metadata,
     )
+    if context is not None:
+        return await graph.ainvoke(state, config=config, context=context)
     return await graph.ainvoke(state, config=config)

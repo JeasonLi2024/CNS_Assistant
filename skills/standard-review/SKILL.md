@@ -1,6 +1,9 @@
 ---
 name: standard-review
-description: 标准文档审核流程（FAISS RAG + LLM Judge 多策略 + 确定性 DOCX/PDF + 质量门控 + 范围扩大回环 + LLM 报告摘要 + scope_summary 聚合）。用于调用 run_standard_review，读取报告、解释问题、说明风险和依据不足。
+description: |
+  标准文档审核流程（FAISS RAG + LLM Judge 多策略 + 确定性 DOCX/PDF + 质量门控 + 范围扩大回环 + LLM 报告摘要 + scope_summary 聚合）。用于调用 run_standard_review，读取报告、解释问题、说明风险和依据不足。
+  强约束：输入必须为 /workspace/output/mineru/**/*.md 或 /workspace/input/uploads/**/*.md；PDF/Word 必须先委派 parser 调用 parse_file_with_mineru；审核本身**不要**先调用元数据抽取。
+  流式事件：state["trace_events"] 与 get_stream_writer 双通道推送 review.* 事件（review.ingest.* / review.retrieve.* / review.judge.* / review.quality_gate.* / review.widen.* / review.format.* / review.aggregate.* / review.report.* / review.manifest.*），与 MinerU mineru.*、langextract meta.* 形成统一 <domain>.<stage> 命名空间。
 ---
 
 # Standard Review
@@ -39,8 +42,7 @@ ingest → retrieve_rules → judge_rules
 ## Instructions
 
 1. **优先调用 `run_standard_review`**，不要手工拼接流程。
-2. PDF/Word 输入且缺少 Markdown / manifest 时，**先调用 `parse_document_with_mineru`**。
-3. 修改 `rules_test.md`、切换嵌入模型、改变 `embedding_dim` 后，**先调用 `build_review_index`**，否则仍会命中旧索引。
+2. PDF/Word 输入且缺少 Markdown / manifest 时，**先调用 `parse_file_with_mineru`**。修改 `rules_test.md`、切换嵌入模型、改变 `embedding_dim` 后，**先调用 `build_review_index`**，否则仍会命中旧索引。
 4. 只想预览会命中哪些规则时，**调用 `inspect_review_rules(query=..., scope=...)`**。
 5. 标准审核不需要先做元数据抽取；**不要把 `extract_standard_metadata` 作为固定前置步骤**。
 6. 所有路径必须使用 `/workspace/` 虚拟路径。
@@ -53,7 +55,7 @@ ingest → retrieve_rules → judge_rules
 
 | 工具 | 用途 | HITL |
 |---|---|---|
-| `parse_document_with_mineru` | PDF/DOCX → Markdown + manifest | ✅ |
+| `parse_file_with_mineru` | PDF/DOCX → Markdown + manifest | ✅ |
 | `run_standard_review` | 执行完整审核（content + format + scope_summary + audit_summary） | ✅ |
 | `run_format_source_review` | 仅执行格式轨 | ✅ |
 | `inspect_review_rules` | FAISS 检索规则 | — |
@@ -63,7 +65,7 @@ ingest → retrieve_rules → judge_rules
 ## Default Workflow
 
 1. 确认输入文件、Markdown 和 manifest。
-2. PDF/Word 且无 Markdown 时调用 `parse_document_with_mineru`。
+2. PDF/Word 且无 Markdown 时调用 `parse_file_with_mineru`。
 3. （可选）`inspect_review_rules` 预览命中规则。
 4. 调用 `run_standard_review`，传入 `trace_id`、`content_path`、`source_path`（DOCX/PDF）、`target_scopes`（可选）、`partial_mode`（`sectional`/`full_document`/`format_only`）。
 5. 调用 `validate_review_result_schema` 自检 `*_audit_result.json`。

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
+from langgraph.config import get_stream_writer
 
 from standard_document_assistant.artifacts import describe_downloadable_artifact
 from standard_document_assistant.config import load_config
@@ -17,7 +18,10 @@ from standard_document_assistant.graphs.metadata_extraction.langextract_runner i
     save_langextract_outputs,
     slice_metadata_scope,
 )
-from standard_document_assistant.graphs.metadata_extraction.state import MetadataExtractionState
+from standard_document_assistant.graphs.metadata_extraction.state import (
+    MetadataExtractionContext,
+    MetadataExtractionState,
+)
 from standard_document_assistant.pathing import (
     allocate_unique_path,
     host_to_virtual_path,
@@ -26,7 +30,8 @@ from standard_document_assistant.pathing import (
     utc_now_iso,
     write_json,
 )
-from standard_document_assistant.schemas import ArtifactManifest, ArtifactRef, StandardMetadataExtraction
+from standard_document_assistant.schemas import ArtifactManifest, ArtifactRef
+from standard_document_assistant.tools.validation import validate_output_schema
 from standard_document_assistant.tracing import METADATA_EXTRACTION_GRAPH_NAME
 
 try:
@@ -39,12 +44,44 @@ except ImportError:  # pragma: no cover - optional in minimal installs
         return decorator
 
 
+def _emit_progress(event_type: str, **payload: Any) -> None:
+    """统一进度事件：节点内通过 ``get_stream_writer`` 推 ``meta.*`` 事件。
+
+    命名规范（与 [tools/parser.py](file:///d:/deep-agents/src/standard_document_assistant/tools/parser.py) 保持一致）：
+
+    - ``meta.scoped``            slice_scope 完成
+    - ``meta.extraction.start``  langextract LLM 调用开始
+    - ``meta.extraction.end``    langextract LLM 调用结束
+    - ``meta.aggregated``        aggregate_fields 完成
+    - ``meta.validated``         validate_schema 完成
+    - ``meta.persisted``         persist_output 落盘完成
+    - ``meta.manifest``          write_manifest 完成
+
+    与 MinerU 的 ``mineru.*`` / 未来 standard_review 的 ``review.*`` 共同构成
+    统一的 ``<domain>.<stage>`` 命名空间，前端通过 ``stream_mode="custom"`` 消费。
+    """
+
+    try:
+        writer = get_stream_writer()
+    except (RuntimeError, AssertionError):
+        # 图外调用 / 测试中调用，get_stream_writer 不可用 —— 静默忽略，不影响主流程
+        return
+    try:
+        writer({"type": event_type, **payload})
+    except (TypeError, ValueError):
+        # 序列化 / payload 错误：不影响主流程
+        return
+
+
 @traceable(run_type="chain", name=f"{METADATA_EXTRACTION_GRAPH_NAME}.run_langextract")
 def _traced_run_extraction(scoped_text: str) -> Any:
     return run_extraction(scoped_text)
 
 
-def load_markdown(state: MetadataExtractionState) -> dict[str, Any]:
+def load_markdown(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     markdown = state.get("markdown", "")
     if markdown:
         return {"markdown": markdown}
@@ -63,18 +100,29 @@ def load_markdown(state: MetadataExtractionState) -> dict[str, Any]:
     }
 
 
-def slice_scope(state: MetadataExtractionState) -> dict[str, Any]:
+def slice_scope(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     config = load_config()
     text = state.get("markdown", "")
     mode = state.get("scope_mode") or config.metadata_extraction.default_scope_mode
     scoped = slice_metadata_scope(text, mode)
     encoded = scoped.encode("utf-8")
     warnings: list[str] = []
+    truncated = False
     if len(encoded) > config.metadata_extraction.scoped_text_max_bytes:
         scoped = encoded[: config.metadata_extraction.scoped_text_max_bytes].decode(
             "utf-8", errors="ignore"
         )
         warnings.append("元数据抽取范围超过限制，已截断。")
+        truncated = True
+    _emit_progress(
+        "meta.scoped",
+        scope_mode=mode,
+        scoped_chars=len(scoped),
+        truncated=truncated,
+    )
     return {
         "scoped_text": scoped,
         "scoped_text_chars": len(scoped),
@@ -82,21 +130,36 @@ def slice_scope(state: MetadataExtractionState) -> dict[str, Any]:
     }
 
 
-def run_langextract(state: MetadataExtractionState) -> dict[str, Any]:
+def run_langextract(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     if state.get("status") == "failed":
         return {}
+    scoped = state.get("scoped_text", "")
+    model_label = "langextract"
     try:
-        scoped = state.get("scoped_text", "")
+        model_label = os.getenv("METADATA_MODEL_ID") or os.getenv("MODEL_ID") or "langextract"
+    except Exception:
+        pass
+    _emit_progress("meta.extraction.start", model=model_label, scoped_chars=len(scoped))
+    try:
         result = _traced_run_extraction(scoped)
+        items = len(getattr(result, "extractions", []) or [])
+        _emit_progress("meta.extraction.end", extracted_items=items)
         return {
             "langextract_result": result,
-            "extracted_items": len(getattr(result, "extractions", []) or []),
+            "extracted_items": items,
         }
     except Exception as exc:
+        _emit_progress("meta.extraction.error", error=str(exc))
         return {"status": "failed", "errors": [f"langextract 元数据抽取失败：{exc}"]}
 
 
-def aggregate_fields(state: MetadataExtractionState) -> dict[str, Any]:
+def aggregate_fields(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     if state.get("status") == "failed":
         return {}
     result = state.get("langextract_result")
@@ -104,8 +167,17 @@ def aggregate_fields(state: MetadataExtractionState) -> dict[str, Any]:
         return {"status": "failed", "errors": ["langextract 未返回抽取结果。"]}
 
     source_label = state.get("source_virtual_path") or state.get("source_path") or ""
+
+    # cover_metadata_hint 优先取 runtime.context（Deep Agents best practice），
+    # 兜底取 state.cover_metadata_hint（保持向后兼容）。
+    ctx_hint: dict[str, Any] = {}
+    if runtime is not None:
+        ctx_dict = getattr(runtime, "context", None)
+        if isinstance(ctx_dict, dict):
+            ctx_hint = ctx_dict.get("cover_metadata_hint") or {}
+    hint = state.get("cover_metadata_hint") or ctx_hint or {}
+
     aggregated = build_extraction_result(result, source_label)
-    hint = state.get("cover_metadata_hint") or {}
     if hint:
         aggregated.setdefault("标准号", hint.get("standard_number", ""))
         aggregated.setdefault("代替标准号", hint.get("replaced_standard_number", ""))
@@ -114,33 +186,74 @@ def aggregate_fields(state: MetadataExtractionState) -> dict[str, Any]:
         aggregated.setdefault("标准层级", hint.get("hierarchy_or_category", ""))
 
     quality_warnings = collect_quality_warnings(aggregated, hint=hint)
+    _emit_progress(
+        "meta.aggregated",
+        single_value_count=sum(
+            1 for k in aggregated if k in {"ICS", "CCS", "标准层级", "标准号", "代替标准号",
+                                            "发布日期", "实施日期", "标准中文名称",
+                                            "标准英文名称", "采标信息"}
+            and aggregated.get(k)
+        ),
+        multi_value_count=sum(
+            len(aggregated.get(k, []) or []) for k in
+            {"提出单位", "归口单位", "起草单位", "起草人", "引用文件", "专业术语"}
+        ),
+        quality_warnings=len(quality_warnings),
+    )
     return {"aggregated": aggregated, "quality_warnings": quality_warnings}
 
 
-def validate_schema(state: MetadataExtractionState) -> dict[str, Any]:
+def validate_schema(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """节点内 Pydantic 校验去重：直接调用 ``validate_output_schema`` 工具函数。
+
+    依据 [module_architecture_review.md §4.3 item 5](file:///d:/deep-agents/design_docs/module_architecture_review.md)：
+    不再单独 ``StandardMetadataExtraction.model_validate``，统一走 tools.validation 入口，
+    确保 schema 名称与错误格式与 ``validate_output_schema`` 工具一致。
+    """
+
     if state.get("status") == "failed":
         return {}
     aggregated = state.get("aggregated") or {}
-    try:
-        parsed = StandardMetadataExtraction.model_validate(aggregated)
-    except ValidationError as exc:
-        config = load_config()
-        validation = {"valid": False, "errors": exc.errors()}
-        if config.metadata_extraction.strict_validation:
-            return {
-                "validation": validation,
-                "status": "failed",
-                "errors": ["元数据 schema 校验失败。"],
-            }
+
+    # strict_validation 优先取 runtime.context.quality_strict，兜底 config
+    config = load_config()
+    strict = config.metadata_extraction.strict_validation
+    if runtime is not None:
+        ctx_dict = getattr(runtime, "context", None)
+        if isinstance(ctx_dict, dict) and isinstance(ctx_dict.get("quality_strict"), bool):
+            strict = ctx_dict["quality_strict"]
+
+    validation = validate_output_schema(
+        aggregated, schema_name="StandardMetadataExtraction"
+    )
+    _emit_progress("meta.validated", valid=bool(validation.get("valid")), strict=strict)
+    if validation.get("valid"):
         return {
             "validation": validation,
-            "quality_warnings": ["元数据 schema 校验存在告警，已保留 langextract 原始聚合结果，未自动修改 JSON。"],
-            "aggregated": aggregated,
+            "aggregated": validation.get("data") or aggregated,
         }
-    return {"validation": {"valid": True, "warnings": []}, "aggregated": parsed.model_dump()}
+    if strict:
+        return {
+            "validation": validation,
+            "status": "failed",
+            "errors": ["元数据 schema 校验失败。"],
+        }
+    return {
+        "validation": validation,
+        "quality_warnings": [
+            "元数据 schema 校验存在告警，已保留 langextract 原始聚合结果，未自动修改 JSON。"
+        ],
+        "aggregated": aggregated,
+    }
 
 
-def persist_output(state: MetadataExtractionState) -> dict[str, Any]:
+def persist_output(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     if state.get("status") == "failed":
         return {}
     config = load_config()
@@ -177,6 +290,12 @@ def persist_output(state: MetadataExtractionState) -> dict[str, Any]:
     aggregated_path = allocate_unique_path(json_dir, f"{safe_name(output_stem, fallback='metadata')}_metadata", ".json")
     write_json(aggregated_path, aggregated)
 
+    _emit_progress(
+        "meta.persisted",
+        virtual_output_path=host_to_virtual_path(aggregated_path),
+        annotated_path=host_to_virtual_path(annotated_path),
+        normalized_path=host_to_virtual_path(normalized_path),
+    )
     return {
         "output_path": str(aggregated_path),
         "output_virtual_path": host_to_virtual_path(aggregated_path),
@@ -187,7 +306,10 @@ def persist_output(state: MetadataExtractionState) -> dict[str, Any]:
     }
 
 
-def write_manifest(state: MetadataExtractionState) -> dict[str, Any]:
+def write_manifest(
+    state: MetadataExtractionState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     if state.get("status") == "failed":
         return {"status": "failed"}
 
@@ -222,6 +344,11 @@ def write_manifest(state: MetadataExtractionState) -> dict[str, Any]:
         created_at=utc_now_iso(),
     )
     write_json(manifest_path, manifest.model_dump())
+    _emit_progress(
+        "meta.manifest",
+        virtual_manifest_path=host_to_virtual_path(manifest_path),
+        artifact_count=len(artifacts),
+    )
     payload: dict[str, Any] = {
         "manifest_path": str(manifest_path),
         "manifest_virtual_path": host_to_virtual_path(manifest_path),
