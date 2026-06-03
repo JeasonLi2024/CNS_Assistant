@@ -2,7 +2,8 @@
   "dependencies": ["."],
   "graphs": {
     "agent": "./agent.py:agent",
-    "metadata_extraction": "./metadata_extraction_graph.py:metadata_extraction"
+    "metadata_extraction": "./metadata_extraction_graph.py:metadata_extraction",
+    "standard_review": "./standard_review_graph.py:standard_review"
   },
   "env": ".env",
   "python_version": "3.12"

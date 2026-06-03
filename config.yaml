@@ -74,14 +74,58 @@ metadata_extraction:
     extraction_passes: 1
 
 standard_review:
+  # 规则源 / 索引目录（绝对或相对项目根的相对路径均可）
   rules_md: src/standard_document_assistant/resources/review_rules/rules_test.md
   index_dir: src/standard_document_assistant/resources/review_rules
+
+  # 召回与回环
   top_k: 8
   max_review_rounds: 2
+  auto_rebuild_index: true
   write_artifacts: true
   output_subdir: ""
   enable_llm_review: true
   scoped_text_max_chars: 12000
+
+  # 报告摘要
+  enable_audit_summary: true
+  summary_model: qwen3.5-flash
+  summary_max_chars: 600
+
+  # LLM Judge
+  judge_provider: dashscope-compatible
+  judge_model: qwen3.5-flash          # 环境变量 DASHSCOPE_JUDGE_MODEL 可覆盖
+  judge_base_url: ""                  # 环境变量 DASHSCOPE_BASE_URL 可覆盖
+  judge_api_key_env: DASHSCOPE_API_KEY
+  judge_temperature: 0.0
+  judge_max_tokens: 2048
+  judge_timeout: 60
+  judge_max_retries: 2
+  judge_max_workers: 4                # 异步并发 Semaphore
+
+  # Embedding / 索引
+  embedding_provider: dashscope
+  embedding_model: text-embedding-v3  # 环境变量 DASHSCOPE_EMBEDDING_MODEL 可覆盖
+  embedding_base_url: ""              # 环境变量 DASHSCOPE_BASE_URL 可覆盖
+  embedding_dim: 1024
+  embedding_api_key_env: DASHSCOPE_API_KEY
+
+  # 上下文裁剪
+  local_context_max_chars: 2200
+  cross_section_max_chars: 3200
+  window_max_chars: 2200
+  window_overlap_chars: 160
+  full_document_single_chars: 2200
+  batch_window_max_rules: 4
+  batch_window_max_chars: 3600
+  batch_scope_max_rules: 4
+  batch_scope_max_chars: 3600
+  min_context_chars_local: 40
+  min_context_chars_cross_section: 120
+  min_context_chars_full_document: 400
+
+  # 置信度降级
+  low_confidence_floor: 0.35
 
 memory:
   checkpointer: memory

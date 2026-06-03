@@ -125,22 +125,24 @@ def search_index(
 
 
 def try_load_faiss(index_dir: Path) -> Any | None:
-    """Optional FAISS loader. Returns ``None`` if FAISS is unavailable."""
+    """Optional FAISS loader.
 
-    try:
-        from langchain_community.vectorstores import FAISS
-    except Exception:
-        return None
+    返回 :class:`standard_document_assistant.review_core.retrievers.FaissVectorRetriever`
+    实例（不是 ``langchain_community`` 的 FAISS），与 :func:`load_knowledge_base`
+    写出的三件套格式对齐；缺 ``rules.faiss`` / ``faiss-cpu`` / ``scikit-learn`` 时
+    返回 ``None``。
+    """
+
     index_path = index_dir / "rules.faiss"
     if not index_path.exists():
         return None
     try:
-        from langchain_community.embeddings.fake import FakeEmbeddings
+        from standard_document_assistant.review_core.retrievers import FaissVectorRetriever
 
-        return FAISS.load_local(
-            str(index_path),
-            FakeEmbeddings(size=1536),
-            allow_dangerous_deserialization=True,
+        return FaissVectorRetriever.load(
+            index_path=str(index_path),
+            metadata_path=str(index_dir / "rules.faiss.meta.json"),
+            vectorizer_path=str(index_dir / "tfidf_vectorizer.pkl"),
         )
     except Exception:
         return None
@@ -159,23 +161,17 @@ def search_faiss_or_tfidf(
         store = try_load_faiss(index_dir)
         if store is not None:
             try:
-                results = store.similarity_search_with_score(query.query, k=top_k)
-                hits: list[RetrievalHit] = []
-                score_map = {rule.chunk_id: float(score) for rule, score in results}
-                for doc, _ in results:
-                    chunk_id = doc.metadata.get("chunk_id", "")
-                    rule = next((r for r in index.rules if r.chunk_id == chunk_id), None)
-                    if rule is None:
-                        continue
-                    hits.append(
-                        RetrievalHit(
-                            rule=rule,
-                            score=score_map.get(chunk_id, 0.0),
-                            source="faiss",
-                            vector_score=score_map.get(chunk_id, 0.0),
-                        )
+                hits_raw = store.search(query, top_k=top_k)
+                # store.search 已经做过 scope 过滤；这里把 source / score 规范化。
+                return [
+                    RetrievalHit(
+                        rule=hit.rule,
+                        score=float(hit.score),
+                        source="faiss",
+                        vector_score=float(hit.vector_score),
                     )
-                return hits
+                    for hit in hits_raw
+                ]
             except Exception:
                 pass
     return search_index(index, query, top_k=top_k)

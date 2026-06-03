@@ -1,0 +1,57 @@
+{
+  "chunk_id_map": [
+    "RAG-0001",
+    "RAG-0002",
+    "RAG-0003"
+  ],
+  "rules": [
+    {
+      "chunk_id": "RAG-0001",
+      "title": "SR-P0-001 范围章节完整性",
+      "scope": "scope",
+      "content": "标准应包含范围章节，并说明标准适用对象和边界。",
+      "source_ref": "D:/deep-agents/src/standard_document_assistant/resources/review_rules/rules_test.md#SR-P0-001 范围章节完整性-p1",
+      "tags": [
+        "scope",
+        "SR-P0-001 范围章节完整性",
+        "标准审核 P0 规则"
+      ],
+      "analysis_mode": "local",
+      "target_scopes": [
+        "scope"
+      ]
+    },
+    {
+      "chunk_id": "RAG-0002",
+      "title": "SR-P0-002 规范性引用文件章节完整性",
+      "scope": "normative_references",
+      "content": "标准应明确规范性引用文件；无引用时应说明无规范性引用文件。",
+      "source_ref": "D:/deep-agents/src/standard_document_assistant/resources/review_rules/rules_test.md#SR-P0-002 规范性引用文件章节完整性-p1",
+      "tags": [
+        "normative_references",
+        "SR-P0-002 规范性引用文件章节完整性",
+        "标准审核 P0 规则"
+      ],
+      "analysis_mode": "local",
+      "target_scopes": [
+        "normative_references"
+      ]
+    },
+    {
+      "chunk_id": "RAG-0003",
+      "title": "SR-P0-003 术语和定义章节完整性",
+      "scope": "terms_definitions",
+      "content": "需要术语定义的标准应提供术语和定义章节。",
+      "source_ref": "D:/deep-agents/src/standard_document_assistant/resources/review_rules/rules_test.md#SR-P0-003 术语和定义章节完整性-p1",
+      "tags": [
+        "terms_definitions",
+        "SR-P0-003 术语和定义章节完整性",
+        "标准审核 P0 规则"
+      ],
+      "analysis_mode": "local",
+      "target_scopes": [
+        "terms_definitions"
+      ]
+    }
+  ]
+}

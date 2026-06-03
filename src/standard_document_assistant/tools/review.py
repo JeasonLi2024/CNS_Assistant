@@ -158,6 +158,14 @@ class BuildReviewIndexInput(BaseModel):
         default=None,
         description="是否丢弃已有索引重新构建，默认 True（推荐在改完 rules_test.md 后调用）。",
     )
+    backend: Literal["auto", "faiss", "tfidf_json"] | None = Field(
+        default=None,
+        description=(
+            "索引后端选择：auto=优先 faiss 缺包/缺文件时退到 tfidf_json；"
+            "faiss=仅走 faiss-cpu；tfidf_json=仅走纯 Python TF-IDF。"
+            "缺省沿用 load_knowledge_base 默认行为。"
+        ),
+    )
 
 
 class ValidateReviewResultSchemaInput(BaseModel):
@@ -695,6 +703,7 @@ def _dispatch_build_review_index(
     *,
     trace_id: str | None,
     force_rebuild: bool,
+    backend: str | None = None,
     runtime: ToolRuntime | None,
 ) -> dict[str, Any]:
     writer = _get_stream_writer(runtime)
@@ -708,7 +717,10 @@ def _dispatch_build_review_index(
     )
     config = load_config().standard_review
     try:
-        kb, kb_meta = load_knowledge_base(config, force_rebuild=force_rebuild)
+        kwargs: dict[str, Any] = {"force_rebuild": force_rebuild}
+        if backend:
+            kwargs["backend"] = backend
+        kb, kb_meta = load_knowledge_base(config, **kwargs)
     except Exception as exc:
         _emit_tool_event(
             {
@@ -729,12 +741,17 @@ def _dispatch_build_review_index(
         "rules_metadata": kb_meta,
         "rules_loaded": len(kb.rules),
         "index_source": kb_meta.get("index_source", "rebuilt"),
+        "index_backend": kb_meta.get("index_backend", "unknown"),
     }
+    warnings = kb_meta.get("warnings") or []
+    if warnings:
+        payload["warnings"] = list(warnings)
     _emit_tool_event(
         {
             "type": "review.tool.end",
             "tool": BUILD_REVIEW_INDEX_TOOL_NAME,
             "status": "ok",
+            "index_backend": payload["index_backend"],
         },
         writer=writer,
     )
@@ -969,11 +986,13 @@ def _build_review_index_sync(
     *,
     trace_id: str | None = None,
     force_rebuild: bool | None = None,
+    backend: str | None = None,
     runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     return _dispatch_build_review_index(
         trace_id=trace_id,
         force_rebuild=bool(force_rebuild) if force_rebuild is not None else True,
+        backend=backend,
         runtime=runtime,
     )
 
@@ -982,11 +1001,13 @@ async def _abuild_review_index_sync(
     *,
     trace_id: str | None = None,
     force_rebuild: bool | None = None,
+    backend: str | None = None,
     runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     return _dispatch_build_review_index(
         trace_id=trace_id,
         force_rebuild=bool(force_rebuild) if force_rebuild is not None else True,
+        backend=backend,
         runtime=runtime,
     )
 

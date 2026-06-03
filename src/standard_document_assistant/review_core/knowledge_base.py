@@ -20,6 +20,7 @@ from standard_document_assistant.review_core.retriever import (
     build_tfidf_index,
     search_faiss_or_tfidf,
 )
+from standard_document_assistant.review_core.retrievers import FaissVectorRetriever
 from standard_document_assistant.review_core.rule_models import QueryContext, RetrievalHit, RuleItem
 
 
@@ -71,9 +72,27 @@ _OPTIONAL_SCOPES = frozenset({"toc", "introduction", "end"})
 
 
 class RuleKnowledgeBase:
-    def __init__(self, rules: list[RuleItem], index: VectorIndex | None = None) -> None:
+    """规则知识库，统一管理 ``rules`` / ``index`` (TF-IDF JSON) / FAISS 检索器。
+
+    加载策略（``load_knowledge_base`` 主导）：
+
+    1. 若 ``index_dir/rules.faiss`` + ``rules.faiss.meta.json`` + ``tfidf_vectorizer.pkl``
+       三件套齐全且未要求 ``force_rebuild``，优先走 FAISS。
+    2. 否则退到 ``index_dir/rules.faiss.json``（纯 Python TF-IDF 回退），
+       保证 ``faiss-cpu`` 不可用时仍可运行。
+    3. 都缺失时按 ``force_rebuild`` 决定是否重建：优先尝试 FAISS（依赖
+       ``faiss-cpu`` + ``scikit-learn``），捕获 ``ImportError`` 后退到 JSON。
+    """
+
+    def __init__(
+        self,
+        rules: list[RuleItem],
+        index: VectorIndex | None = None,
+    ) -> None:
         self.rules = rules
         self.index = index
+        # FAISS 检索器是按 index_dir 缓存的，避免在多次 search 时反复反序列化。
+        self._faiss_retriever: dict[str, FaissVectorRetriever] = {}
 
     @classmethod
     def from_markdown(cls, rule_markdown_path: str | Path, *, embedding_dim: int = 1024) -> "RuleKnowledgeBase":
@@ -88,11 +107,82 @@ class RuleKnowledgeBase:
 
     @classmethod
     def from_index(cls, index_dir: str | Path) -> "RuleKnowledgeBase":
+        """从 TF-IDF JSON 索引加载（保持向后兼容）。"""
         path = Path(index_dir) / "rules.faiss.json"
         if not path.exists():
             raise FileNotFoundError(f"向量索引不存在：{path}")
         index = VectorIndex.load(path.parent)
         return cls(rules=index.rules, index=index)
+
+    @classmethod
+    def from_faiss_index(cls, index_dir: str | Path) -> "RuleKnowledgeBase":
+        """从 FAISS 三件套加载（``rules.faiss`` + meta + pkl）。"""
+        index_path = Path(index_dir)
+        retriever = FaissVectorRetriever.load(
+            index_path=str(index_path / "rules.faiss"),
+            metadata_path=str(index_path / "rules.faiss.meta.json"),
+            vectorizer_path=str(index_path / "tfidf_vectorizer.pkl"),
+        )
+        kb = cls(rules=list(retriever.rules))
+        kb._faiss_retriever[str(index_path.resolve())] = retriever
+        # 同步构建一份轻量 VectorIndex（不带 vectors），供旧 search 路径使用。
+        return kb
+
+    def build_faiss(self, index_dir: str | Path) -> dict[str, Any]:
+        """构建并持久化 FAISS 三件套到 ``index_dir``。
+
+        依赖 ``faiss-cpu`` + ``scikit-learn``；缺包时抛 ``ImportError``，由
+        :func:`load_knowledge_base` 在外层捕获并退到 JSON 回退。
+        """
+        index_path = Path(index_dir)
+        index_path.mkdir(parents=True, exist_ok=True)
+
+        retriever = FaissVectorRetriever(self.rules)
+        retriever.build()
+        retriever.save(
+            index_path=str(index_path / "rules.faiss"),
+            metadata_path=str(index_path / "rules.faiss.meta.json"),
+            vectorizer_path=str(index_path / "tfidf_vectorizer.pkl"),
+        )
+        # 缓存新构建的检索器，并清掉旧实例。
+        self._faiss_retriever = {
+            str(index_path.resolve()): retriever,
+        }
+        return {
+            "index_path": str(index_path / "rules.faiss"),
+            "meta_path": str(index_path / "rules.faiss.meta.json"),
+            "vectorizer_path": str(index_path / "tfidf_vectorizer.pkl"),
+            "rules_total": len(self.rules),
+        }
+
+    def search_faiss(
+        self,
+        query: str,
+        scope: str | None,
+        top_k: int,
+        index_dir: str | Path,
+    ) -> list[RetrievalHit]:
+        """走 FAISS 检索；首次按 index_dir 缓存，后续直接复用。"""
+        retriever = self._get_faiss_retriever(index_dir)
+        return retriever.search(QueryContext(query=query, scope=scope), top_k=top_k)
+
+    def warmup_faiss(self, index_dir: str | Path) -> None:
+        """预热 FAISS 检索器，避免首次 search 时被并发触发加载。"""
+        self._get_faiss_retriever(index_dir)
+
+    def _get_faiss_retriever(self, index_dir: str | Path) -> FaissVectorRetriever:
+        key = str(Path(index_dir).resolve())
+        cached = self._faiss_retriever.get(key)
+        if cached is not None:
+            return cached
+        index_path = Path(key)
+        retriever = FaissVectorRetriever.load(
+            index_path=str(index_path / "rules.faiss"),
+            metadata_path=str(index_path / "rules.faiss.meta.json"),
+            vectorizer_path=str(index_path / "tfidf_vectorizer.pkl"),
+        )
+        self._faiss_retriever[key] = retriever
+        return retriever
 
     def search(
         self,
@@ -102,11 +192,17 @@ class RuleKnowledgeBase:
         top_k: int = 8,
         index_dir: str | Path | None = None,
     ) -> list[RetrievalHit]:
+        # 优先尝试 FAISS：faiss-cpu 装好且 index_dir 下三件套齐全时走原路径。
+        if index_dir is not None:
+            try:
+                return self.search_faiss(query, scope=scope, top_k=top_k, index_dir=index_dir)
+            except (FileNotFoundError, ImportError, RuntimeError, ValueError):
+                # 缺文件/缺包/索引维度异常都退到 TF-IDF，不阻塞主流程。
+                pass
         if self.index is None:
             return []
         context = QueryContext(query=query, scope=scope)
-        path = Path(index_dir) if index_dir else None
-        return search_faiss_or_tfidf(self.index, context, top_k=top_k, index_dir=path)
+        return search_faiss_or_tfidf(self.index, context, top_k=top_k, index_dir=None)
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -120,8 +216,16 @@ def load_knowledge_base(
     config: StandardReviewConfig,
     *,
     force_rebuild: bool = False,
+    backend: str = "auto",
 ) -> tuple[RuleKnowledgeBase, dict[str, Any]]:
-    """Build or load the knowledge base; return both the KB and run metadata."""
+    """Build or load the knowledge base; return both the KB and run metadata.
+
+    ``backend`` 决定构建/加载顺序：
+
+    - ``"faiss"``：仅走 FAISS（缺依赖时抛 ``ImportError``）。
+    - ``"tfidf_json"``：仅走 ``rules.faiss.json``（纯 Python TF-IDF）。
+    - ``"auto"``（默认）：先 FAISS，缺包/缺文件时退到 JSON。
+    """
 
     rules_path = Path(config.rules_md)
     if not rules_path.is_absolute():
@@ -135,26 +239,80 @@ def load_knowledge_base(
         "rules_path": str(rules_path),
         "index_dir": str(index_dir),
         "embedding_dim": int(config.embedding_dim),
+        "index_backend": "unknown",
     }
-    faiss_index_path = index_dir / "rules.faiss.json"
+    faiss_triplet = (
+        index_dir / "rules.faiss",
+        index_dir / "rules.faiss.meta.json",
+        index_dir / "tfidf_vectorizer.pkl",
+    )
+    faiss_json_path = index_dir / "rules.faiss.json"
 
-    if not force_rebuild and faiss_index_path.exists():
-        try:
-            kb = RuleKnowledgeBase.from_index(index_dir)
-            if kb.rules and any(rule.title for rule in kb.rules):
-                metadata["rules_loaded"] = len(kb.rules)
-                metadata["index_source"] = "disk"
-                return kb, metadata
-        except Exception:
-            pass
+    faiss_available = backend in ("auto", "faiss")
+    tfidf_available = backend in ("auto", "tfidf_json")
 
+    # ---- 阶段 1：磁盘加载（不重建） ----
+    if not force_rebuild:
+        if faiss_available and all(p.exists() for p in faiss_triplet):
+            try:
+                kb = RuleKnowledgeBase.from_faiss_index(index_dir)
+                if kb.rules and any(rule.title for rule in kb.rules):
+                    metadata["rules_loaded"] = len(kb.rules)
+                    metadata["index_source"] = "disk"
+                    metadata["index_backend"] = "faiss"
+                    return kb, metadata
+            except Exception:
+                pass
+        if tfidf_available and faiss_json_path.exists():
+            try:
+                kb = RuleKnowledgeBase.from_index(index_dir)
+                if kb.rules and any(rule.title for rule in kb.rules):
+                    metadata["rules_loaded"] = len(kb.rules)
+                    metadata["index_source"] = "disk"
+                    metadata["index_backend"] = "tfidf_json"
+                    return kb, metadata
+            except Exception:
+                pass
+
+    # ---- 阶段 2：从 markdown 重建 ----
     kb = RuleKnowledgeBase.from_markdown(rules_path, embedding_dim=int(config.embedding_dim))
-    if kb.index is not None:
-        kb.index.save(index_dir)
-    metadata["rules_loaded"] = len(kb.rules)
-    metadata["index_source"] = "rebuilt"
-    metadata["rules_hash"] = _hash_rules_text(rules_path)
-    return kb, metadata
+
+    # 优先尝试 FAISS 重建
+    if faiss_available:
+        try:
+            kb.build_faiss(index_dir)
+            metadata["rules_loaded"] = len(kb.rules)
+            metadata["index_source"] = "rebuilt"
+            metadata["index_backend"] = "faiss"
+            metadata["rules_hash"] = _hash_rules_text(rules_path)
+            return kb, metadata
+        except ImportError as exc:
+            metadata.setdefault("warnings", []).append(
+                f"faiss-cpu / scikit-learn 不可用，回退到 tfidf_json：{exc}"
+            )
+            if backend == "faiss":
+                # 用户明确要求 faiss，缺依赖就直接抛。
+                raise
+        except Exception as exc:  # pragma: no cover - 取决于 faiss 版本
+            metadata.setdefault("warnings", []).append(
+                f"FAISS 索引构建失败，回退到 tfidf_json：{exc}"
+            )
+            if backend == "faiss":
+                raise
+
+    # 退到 JSON TF-IDF 重建
+    if tfidf_available:
+        if kb.index is not None:
+            kb.index.save(index_dir)
+        metadata["rules_loaded"] = len(kb.rules)
+        metadata["index_source"] = "rebuilt"
+        metadata["index_backend"] = "tfidf_json"
+        metadata["rules_hash"] = _hash_rules_text(rules_path)
+        return kb, metadata
+
+    raise RuntimeError(
+        f"backend={backend!r} 不被支持，可选 'auto' | 'faiss' | 'tfidf_json'。"
+    )
 
 
 def filter_content_audit_rules(rules: list[RuleItem]) -> list[RuleItem]:
