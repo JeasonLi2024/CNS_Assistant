@@ -6,7 +6,7 @@ models:
   primary:
     provider: qwen
     class: langchain_qwq.ChatQwen
-    model: qwen3.7-max
+    model: qwen3.7-plus
     temperature: 0
     max_tokens: 8000
     timeout: 60
@@ -64,7 +64,7 @@ metadata_extraction:
   write_artifacts: true
   model:
     provider: dashscope-compatible
-    model: qwen3.5-flash
+    model: qwen3.7-plus
     base_url: ""
     timeout: 120
     max_retries: 2
@@ -89,12 +89,12 @@ standard_review:
 
   # 报告摘要
   enable_audit_summary: true
-  summary_model: qwen3.5-flash
+  summary_model: qwen3.7-plus
   summary_max_chars: 600
 
   # LLM Judge
   judge_provider: dashscope-compatible
-  judge_model: qwen3.5-flash          # 环境变量 DASHSCOPE_JUDGE_MODEL 可覆盖
+  judge_model: qwen3.7-plus         # 环境变量 DASHSCOPE_JUDGE_MODEL 可覆盖
   judge_base_url: ""                  # 环境变量 DASHSCOPE_BASE_URL 可覆盖
   judge_api_key_env: DASHSCOPE_API_KEY
   judge_temperature: 0.0
@@ -103,12 +103,12 @@ standard_review:
   judge_max_retries: 2
   judge_max_workers: 4                # 异步并发 Semaphore
 
-  # Embedding / 索引
-  embedding_provider: dashscope
-  embedding_model: text-embedding-v3  # 环境变量 DASHSCOPE_EMBEDDING_MODEL 可覆盖
-  embedding_base_url: ""              # 环境变量 DASHSCOPE_BASE_URL 可覆盖
-  embedding_dim: 1024
-  embedding_api_key_env: DASHSCOPE_API_KEY
+  # Embedding / 索引（占位，尚未使用）
+  # embedding_provider: dashscope
+  # embedding_model: text-embedding-v3  # 环境变量 DASHSCOPE_EMBEDDING_MODEL 可覆盖
+  # embedding_base_url: ""              # 环境变量 DASHSCOPE_BASE_URL 可覆盖
+  # embedding_dim: 1024
+  # embedding_api_key_env: DASHSCOPE_API_KEY
 
   # 上下文裁剪
   local_context_max_chars: 2200

@@ -33,6 +33,7 @@
 | **子图** | `metadata_extraction`、`standard_review` 两个 LangGraph 子图（均带 `Command` 条件边），全部注册到 `langgraph.json` |
 | **Send 并行** | `judge_rules` 内 `asyncio.gather` + `Semaphore` 对 scope/rule 二维分组扇出 |
 | **Stream** | `state["trace_events"]` + `get_stream_writer` 双通道，命名空间统一 `<domain>.<stage>` |
+| **FastAPI BFF** | 本地 `uvicorn` 代理后端：上传、SSE 透传、HITL resume、产物下载 |
 | **多用户 runtime** | `_memory_namespace_factory` 按 LangGraph Server `server_info.user.identity` 隔离 |
 | **离线可跑** | FAISS 不可用时回退 TF-IDF JSON；LLM 无 key 时回退 `FakeListChatModel` |
 | **Studio 可视化** | `langgraph dev` 即可在 http://localhost:2024 看到主图 + 两个子图 |
@@ -80,6 +81,12 @@ d:\deep-agents\
 │   ├── agent.py                   # 主 Agent + middleware + permissions + subagents
 │   ├── artifacts.py               # 产物下载链接、注册器
 │   ├── streaming.py               # SSE 流式响应包装
+│   ├── api/                       # FastAPI BFF：上传 / 流式运行 / HITL / 下载
+│   │   ├── app.py                 # uvicorn 入口：standard_document_assistant.api.app:app
+│   │   ├── models.py
+│   │   ├── settings.py
+│   │   ├── langgraph_client.py
+│   │   └── sse_adapter.py
 │   ├── tools/
 │   │   ├── parser.py              # parse_file_with_mineru（sync + async 双实现）
 │   │   ├── metadata.py            # extract_standard_metadata
@@ -271,10 +278,11 @@ lxml                    # XML / OOXML 处理
 | `LANGSMITH_TRACING=true` | 开启 trace 上报 | 生产强烈建议 |
 | `LANGSMITH_API_KEY` | LangSmith API key | 必需 |
 | `LANGSMITH_PROJECT` | LangSmith 项目名 | 默认 `standard-document-assistant` |
+| `LANGGRAPH_API_URL` | FastAPI BFF 调用的 LangGraph Server 地址 | 本地默认 `http://127.0.0.1:2024` |
 | `STANDARD_DOC_ENABLE_WORKSPACE_BACKEND` | 是否启用 `/workspace/` 真实 Filesystem | 本地 `1`，LangGraph 部署 `0` |
 | `STANDARD_DOC_ENABLE_LOCAL_SKILLS_BACKEND` | 是否启用 `/skills/` 真实 Filesystem | 默认 `1` |
 | `STANDARD_DOC_ENABLE_HITL` | 主 Agent HITL 强制开关 | `langgraph dev` 默认关；生产/自建 API 设 `1` |
-| `STANDARD_DOC_ARTIFACT_API_BASE` | 产物下载 API 前缀 | 自建 HTTP 路由时使用 |
+| `STANDARD_DOC_ARTIFACT_API_BASE` | 产物下载 API 前缀 | FastAPI 本地默认 `http://127.0.0.1:8080` |
 | `STANDARD_DOC_EXPOSE_HOST_PATH` | SSE/API 是否暴露 `host_path` | 本地调试设 `1` |
 
 > **绝不**把任何 Key 写入 `config.yaml` 或提交到 Git。读取时全部走
@@ -789,6 +797,34 @@ agent = build_standard_document_agent(strict_model=True, langgraph_server=False)
 
 `/api/threads/{thread_id}/runs/stream` SSE 推送 → 前端按 `<domain>` 分通道渲染进度。
 
+### 11.4 FastAPI BFF（本地 Phase 1）
+
+当前已提供本地 FastAPI 代理后端，用于在 `langgraph dev` 外层补齐业务接口：
+
+- 文件上传：保存到 `/workspace/input/uploads/{thread_id}/`，返回 Deep Agents 虚拟路径。
+- 标准审核流式入口：调用 LangGraph Server 上游 `agent`，以 SSE 返回 `run.started`、`agent.progress`、`approval.required`、`artifact.created`、`run.completed` 等事件。
+- HITL 恢复：通过 `Command(resume={"decisions": [...]})` 恢复暂停的 run。
+- 产物列表与下载：按 thread 登记并下载审核报告、结果 JSON、trace、manifest 等产物。
+
+FastAPI 入口：
+
+```powershell
+uvicorn standard_document_assistant.api.app:app --host 0.0.0.0 --port 8080 --reload
+```
+
+本地审核的典型调用链：
+
+```text
+POST /api/threads
+POST /api/threads/{thread_id}/uploads
+POST /api/threads/{thread_id}/standard-review/stream
+POST /api/threads/{thread_id}/runs/resume        # 如 SSE 出现 approval.required
+GET  /api/threads/{thread_id}/artifacts
+GET  /api/threads/{thread_id}/artifacts/{artifact_id}/download
+```
+
+完整接口文档见：[design_docs/FASTAPI_BFF_PHASE1_API.md](file:///d:/deep-agents/design_docs/FASTAPI_BFF_PHASE1_API.md)。
+
 ---
 
 ## 12. Send 并行化
@@ -905,7 +941,12 @@ pip install -e ".[documents,mineru,extraction,review,dev]"
 Copy-Item .env.example .env
 notepad .env
 # 必填：DASHSCOPE_API_KEY、LANGSMITH_API_KEY
-# 选填：MINERU_API_TOKEN（precise 模式）、STANDARD_DOC_ARTIFACT_API_BASE
+# 选填：MINERU_API_TOKEN（precise 模式）
+# FastAPI BFF 本地联调建议：
+# LANGGRAPH_API_URL=http://127.0.0.1:2024
+# STANDARD_DOC_ARTIFACT_API_BASE=http://127.0.0.1:8080
+# STANDARD_DOC_ENABLE_HITL=1
+# STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1
 
 # 3. 构建审核规则索引（首次 / 改 rules_test.md 后）
 python scripts/rebuild_rules_index.py --force-rebuild --backend auto
@@ -916,15 +957,26 @@ python scripts/final_smoke.py
 # 5. 跑 pytest 单元 / 集成
 python -m pytest -q
 
-# 6. 启动 LangGraph Server / Studio
-langgraph dev
+# 6. 启动 LangGraph Server / Studio（第一个终端）
+langgraph dev --host 127.0.0.1 --port 2024 --no-browser
 # 浏览器打开 http://localhost:2024 即可在 Studio 中调用
+
+# 7. 启动 FastAPI BFF（第二个终端）
+uvicorn standard_document_assistant.api.app:app --host 0.0.0.0 --port 8080 --reload
+# Health: http://127.0.0.1:8080/health
+# Swagger: http://127.0.0.1:8080/docs
 ```
 
 > Windows 下 `langgraph dev` 会自动加载 [agent.py](file:///d:/deep-agents/agent.py) /
 > [metadata_extraction_graph.py](file:///d:/deep-agents/metadata_extraction_graph.py) /
 > [standard_review_graph.py](file:///d:/deep-agents/standard_review_graph.py) 三个
 > graph 入口（[langgraph.json](file:///d:/deep-agents/langgraph.json)）。
+>
+> 通过 FastAPI 接口执行标准文档审核的完整步骤见
+> [design_docs/FASTAPI_BFF_PHASE1_API.md](file:///d:/deep-agents/design_docs/FASTAPI_BFF_PHASE1_API.md)，核心流程是：
+> 创建 thread → 上传 PDF/DOCX/Markdown → 调用
+> `POST /api/threads/{thread_id}/standard-review/stream` → 如需审批则调用
+> `POST /api/threads/{thread_id}/runs/resume` → 查询并下载产物。
 
 ---
 

@@ -1,0 +1,260 @@
+"""FastAPI BFF for local standard document assistant testing."""
+
+from __future__ import annotations
+
+import os
+import uuid
+from collections.abc import AsyncIterator
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from langgraph_sdk.schema import Command
+
+from standard_document_assistant.api.langgraph_client import get_langgraph_client
+from standard_document_assistant.api.models import (
+    CreateThreadRequest,
+    ResumeRunRequest,
+    RunStreamRequest,
+    StandardReviewRequest,
+)
+from standard_document_assistant.api.settings import get_settings
+from standard_document_assistant.api.sse_adapter import map_langgraph_part
+from standard_document_assistant.artifacts import (
+    list_thread_artifacts,
+    public_artifact_record,
+    resolve_thread_artifact_path,
+)
+from standard_document_assistant.pathing import utc_now_iso
+from standard_document_assistant.streaming import sse_encode
+from standard_document_assistant.uploads import save_uploaded_file
+
+
+settings = get_settings()
+os.environ.setdefault("STANDARD_DOC_ARTIFACT_API_BASE", settings.artifact_api_base)
+
+app = FastAPI(
+    title="Standard Document Assistant API",
+    version="0.1.0",
+    description="Local FastAPI BFF for LangGraph Server hosted Deep Agents.",
+)
+
+
+def _assistant_id(value: str | None) -> str:
+    return value or get_settings().assistant_id
+
+
+def _stream_modes(value: list[str] | None) -> list[str]:
+    return list(value or get_settings().default_stream_modes)
+
+
+def _input_from_message(message: str | None, raw_input: dict | None) -> dict:
+    if raw_input is not None:
+        return raw_input
+    if not message or not message.strip():
+        raise HTTPException(status_code=400, detail="message 和 input 至少提供一个。")
+    return {"messages": [{"role": "user", "content": message}]}
+
+
+def _review_message(payload: StandardReviewRequest) -> str:
+    extra = f"\n\n补充要求：{payload.instruction.strip()}" if payload.instruction else ""
+    return (
+        "请对以下标准文档执行标准审核，按解析 -> 信息抽取 -> 审核 -> 报告生成流程处理。\n\n"
+        f"文件路径：{payload.file_path}\n"
+        "请返回关键发现、风险等级、审核报告和可下载产物路径。"
+        f"{extra}"
+    )
+
+
+@app.get("/health")
+async def health() -> dict[str, object]:
+    current = get_settings()
+    return {
+        "status": "ok",
+        "app": "standard-document-assistant-api",
+        "langgraph_api_url": current.langgraph_api_url,
+        "assistant_id": current.assistant_id,
+        "artifact_api_base": current.artifact_api_base,
+        "created_at": utc_now_iso(),
+    }
+
+
+@app.post("/api/threads")
+async def create_thread(payload: CreateThreadRequest | None = None) -> dict:
+    body = payload or CreateThreadRequest()
+    client = get_langgraph_client()
+    try:
+        thread = await client.threads.create(
+            thread_id=body.thread_id,
+            metadata=body.metadata,
+            if_exists="do_nothing" if body.thread_id else None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"创建 LangGraph thread 失败：{exc}") from exc
+    return dict(thread)
+
+
+@app.post("/api/threads/{thread_id}/uploads")
+async def upload_file(thread_id: str, file: UploadFile = File(...)) -> dict:
+    content = await file.read()
+    try:
+        record = save_uploaded_file(
+            original_filename=file.filename or "upload",
+            content=content,
+            thread_id=thread_id,
+            content_type=file.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return record.model_dump()
+
+
+@app.post("/api/threads/{thread_id}/runs/stream")
+async def stream_run(thread_id: str, payload: RunStreamRequest) -> StreamingResponse:
+    input_payload = _input_from_message(payload.message, payload.input)
+    return StreamingResponse(
+        _stream_run_events(
+            thread_id=thread_id,
+            assistant_id=_assistant_id(payload.assistant_id),
+            input_payload=input_payload,
+            stream_modes=_stream_modes(payload.stream_modes),
+            stream_subgraphs=(
+                get_settings().stream_subgraphs
+                if payload.stream_subgraphs is None
+                else payload.stream_subgraphs
+            ),
+            metadata=payload.metadata,
+            context=payload.context,
+        ),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/api/threads/{thread_id}/standard-review/stream")
+async def stream_standard_review(
+    thread_id: str,
+    payload: StandardReviewRequest,
+) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_run_events(
+            thread_id=thread_id,
+            assistant_id=_assistant_id(payload.assistant_id),
+            input_payload={"messages": [{"role": "user", "content": _review_message(payload)}]},
+            stream_modes=list(get_settings().default_stream_modes),
+            stream_subgraphs=get_settings().stream_subgraphs,
+            metadata={"task_type": "standard_review", "source_virtual_path": payload.file_path},
+            context=None,
+        ),
+        media_type="text/event-stream",
+    )
+
+
+async def _stream_run_events(
+    *,
+    thread_id: str,
+    assistant_id: str,
+    input_payload: dict,
+    stream_modes: list[str],
+    stream_subgraphs: bool,
+    metadata: dict | None,
+    context: dict | None,
+) -> AsyncIterator[str]:
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    seen_message_ids: set[str] = set()
+    artifact_ids: list[str] = []
+    yield sse_encode(
+        "run.started",
+        {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "stream_modes": stream_modes,
+        },
+    )
+    client = get_langgraph_client()
+    try:
+        async for part in client.runs.stream(
+            thread_id,
+            assistant_id,
+            input=input_payload,
+            stream_mode=stream_modes,
+            stream_subgraphs=stream_subgraphs,
+            metadata=metadata,
+            context=context,
+        ):
+            for mapped in map_langgraph_part(
+                part,
+                run_id=run_id,
+                thread_id=thread_id,
+                seen_message_ids=seen_message_ids,
+            ):
+                if mapped["event"] == "artifact.created":
+                    artifact_id = mapped["data"].get("artifact_id")
+                    if artifact_id:
+                        artifact_ids.append(str(artifact_id))
+                yield sse_encode(mapped["event"], mapped["data"])
+        yield sse_encode(
+            "run.completed",
+            {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "artifact_ids": artifact_ids,
+            },
+        )
+    except Exception as exc:
+        yield sse_encode(
+            "run.failed",
+            {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "error": str(exc),
+                "recoverable": True,
+                "next_action": "确认 langgraph dev 已启动，并检查模型、MinerU 与文件路径配置。",
+            },
+        )
+
+
+@app.post("/api/threads/{thread_id}/runs/resume")
+async def resume_run(thread_id: str, payload: ResumeRunRequest) -> dict:
+    client = get_langgraph_client()
+    decision: dict[str, str] = {"type": payload.action}
+    if payload.message:
+        decision["message"] = payload.message
+    command = Command(resume={"decisions": [decision]})
+    try:
+        result = await client.runs.wait(
+            thread_id,
+            _assistant_id(payload.assistant_id),
+            command=command,
+            metadata=payload.metadata,
+            context=payload.context,
+            raise_error=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"恢复 LangGraph run 失败：{exc}") from exc
+    return {"thread_id": thread_id, "result": result}
+
+
+@app.get("/api/threads/{thread_id}/artifacts")
+async def artifacts(thread_id: str) -> dict[str, object]:
+    records = list_thread_artifacts(thread_id)
+    return {
+        "thread_id": thread_id,
+        "artifacts": [public_artifact_record(record) for record in records],
+    }
+
+
+@app.get("/api/threads/{thread_id}/artifacts/{artifact_id}/download")
+async def download_artifact(thread_id: str, artifact_id: str) -> FileResponse:
+    try:
+        path = resolve_thread_artifact_path(thread_id, artifact_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    record = next(
+        (item for item in list_thread_artifacts(thread_id) if item.artifact_id == artifact_id),
+        None,
+    )
+    media_type = record.content_type if record is not None else "application/octet-stream"
+    filename = record.stored_filename if record is not None else path.name
+    return FileResponse(path, media_type=media_type, filename=filename)

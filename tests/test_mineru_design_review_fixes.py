@@ -164,22 +164,56 @@ def test_5xx_response_is_retried_via_request_error() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# C2: parser 不再使用 InjectedToolArg
+# C2: parser 显式 args_schema + InjectedToolArg（避免 PydanticInvalidForJsonSchema）
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_parser_no_longer_uses_injected_tool_arg() -> None:
-    """``_parse_file_with_mineru_sync`` 的 runtime 参数应该是裸 ``ToolRuntime | None``。"""
+def test_parser_uses_injected_tool_arg_and_explicit_args_schema() -> None:
+    """``parse_file_with_mineru`` 必须用 ``InjectedToolArg`` + 显式 ``args_schema``。
+
+    背景：在 LangChain 1.x 中，``ToolRuntime`` 含 ``__call__``，Pydantic 在
+    ``model_json_schema`` 时无法为它生成 JSON schema。若仅在函数签名上
+    标注 ``InjectedToolArg`` 而不提供显式 ``args_schema``，
+    ``StructuredTool.from_function(infer_schema=True)`` 仍会把
+    ``runtime`` 纳入 schema 并触发
+    ``PydanticInvalidForJsonSchema: core_schema.CallableSchema``。
+    修复方式：函数签名 + ``args_schema`` 二者缺一不可。
+    """
 
     import inspect
+    from typing import get_args, get_origin, get_type_hints
 
-    sig = inspect.signature(_parse_file_with_mineru_sync)
-    runtime_param = sig.parameters["runtime"]
-    # 必须没有 ``Annotated[..., InjectedToolArg]`` 包裹
-    assert runtime_param.annotation is not inspect.Parameter.empty
-    # 不依赖 InjectedToolArg 导入
-    import standard_document_assistant.tools.parser as parser_mod
-    assert not hasattr(parser_mod, "InjectedToolArg")
+    from langchain_core.tools import InjectedToolArg, StructuredTool
+
+    # ``from __future__ import annotations`` 会让 inspect.signature 返回字符串；
+    # 用 get_type_hints 真正解析 ``runtime: Annotated[ToolRuntime | None, InjectedToolArg]``。
+    hints = get_type_hints(
+        _parse_file_with_mineru_sync,
+        include_extras=True,  # 保留 Annotated 包装
+        globalns=vars(sys.modules[_parse_file_with_mineru_sync.__module__]),
+    )
+    runtime_annotation = hints["runtime"]
+    assert get_origin(runtime_annotation) is not None, "runtime 必须是 Annotated[...]"
+    assert InjectedToolArg in get_args(runtime_annotation), (
+        "runtime 参数必须用 Annotated[..., InjectedToolArg] 标注"
+    )
+
+    # 工具必须显式提供 args_schema，且不含 runtime 字段
+    from standard_document_assistant.tools.parser import parse_file_with_mineru
+
+    assert isinstance(parse_file_with_mineru, StructuredTool)
+    assert parse_file_with_mineru.args_schema is not None
+    fields = set(parse_file_with_mineru.args_schema.model_fields.keys())
+    assert "runtime" not in fields, "args_schema 不应暴露 runtime 字段"
+    assert "file_path" in fields
+
+    # JSON schema 必须可序列化（不能含 core_schema.CallableSchema）
+    import json
+
+    schema = parse_file_with_mineru.args_schema.model_json_schema()
+    json.dumps(schema)  # 不抛异常即通过
+    assert "properties" in schema
+    assert "runtime" not in schema["properties"]
 
 
 def test_parser_uses_runtime_stream_writer(monkeypatch) -> None:

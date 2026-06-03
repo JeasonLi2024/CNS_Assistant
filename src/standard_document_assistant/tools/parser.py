@@ -1,22 +1,34 @@
 """Document parsing tool backed by MinerU.
 
-Design notes (2026-06-03, rev. 2)
+Design notes (2026-06-03, rev. 4)
 ---------------------------------
 1. **同步 / 异步双实现**：保留 ``_parse_file_with_mineru_sync`` 作为同步实现，
    新增 ``_parse_file_with_mineru_async`` 用 ``asyncio.to_thread`` 包裹，
    通过 ``StructuredTool.from_function(func=..., coroutine=...)`` 同时暴露。
-2. **进度推送（v2 写法）**：
-   - 工具入参 ``runtime: ToolRuntime | None = None``（LangChain 1.x 推荐的
-     新写法，**不再**使用 ``InjectedToolArg``）。
-   - 进度通过 ``runtime.stream_writer`` 推送，避免 ``get_stream_writer()``
-     在 Python<3.11 async 上下文下失效的问题（官方文档原话）。
-   - 同步 / 异步版本都接收外层传入的 ``stream_writer``（async wrapper 在
-     事件循环线程内捕获，确保 thread-safe），保证事件始终写到正确的 writer。
-3. **断点续跑 / 缓存**：按设计文档 §3.3 item 5 取消；
+2. **args_schema + InjectedToolArg**（核心修复）：
+   - 提供显式 ``args_schema=ParseFileWithMineruInput``（Pydantic BaseModel），
+     只声明业务字段 ``file_path`` / ``return_images`` / 等。
+   - 工具函数入参 ``runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None``，
+     ``InjectedToolArg`` 告诉 StructuredTool 该参数由框架注入，**不**进入
+     args_schema、**不**进 prompt。
+   - 这是 LangChain 1.x 中避免 ``PydanticInvalidForJsonSchema:
+     core_schema.CallableSchema`` 的标准做法：
+       * ``ToolRuntime`` 是一个含 ``__call__`` 的复杂 dataclass 类型，
+         Pydantic 在 ``model_json_schema`` 时无法为其生成 JSON schema；
+       * ``StructuredTool.from_function`` 在 ``infer_schema=True`` 时通过
+         ``create_schema_from_function`` 推断 schema，``_filter_schema_args``
+         只过滤 ``FILTERED_ARGS`` 和 config 参数，**不**识别
+         ``InjectedToolArg``，因此 ``runtime`` 仍会被纳入字段并触发错误；
+       * 显式提供 ``args_schema`` 是唯一可靠的做法。
+3. **进度推送**：通过 ``runtime.stream_writer`` 推送，避免
+   ``get_stream_writer()`` 在 Python<3.11 async 上下文下失效的问题。
+   同步 / 异步版本都接收外层传入的 ``stream_writer``，保证事件始终
+   写到正确的 writer。
+4. **断点续跑 / 缓存**：按设计文档 §3.3 item 5 取消；
    保留 ``skip_if_zip_exists`` 作为本地 ZIP **性能缓存**。
-4. **HITL 决策粒度**：由 ``agent.py:build_subagents.parser_spec`` 决定，
+5. **HITL 决策粒度**：由 ``agent.py:build_subagents.parser_spec`` 决定，
    本工具不内置 HITL 触发。
-5. **错误分类**：网络 / 协议错误走 ``MinerURequestError``，配置 / 参数错误
+6. **错误分类**：网络 / 协议错误走 ``MinerURequestError``，配置 / 参数错误
    走 ``MinerUConfigError``，由 ``client.py`` 抛出。
 """
 
@@ -26,10 +38,11 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from langchain.tools import ToolRuntime
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import InjectedToolArg, StructuredTool
+from pydantic import BaseModel, Field
 
 from standard_document_assistant.config import load_config
 from standard_document_assistant.constants import SAMPLES_DIR, UPLOADS_DIR
@@ -52,6 +65,48 @@ logger = logging.getLogger(__name__)
 
 
 SUPPORTED_MINERU_SUFFIXES = {".pdf", ".docx"}
+
+
+class ParseFileWithMineruInput(BaseModel):
+    """args_schema for :func:`parse_file_with_mineru`.
+
+    业务字段全部以 Pydantic 形式声明，由 StructuredTool 入口校验；
+    ``runtime`` 由框架通过 ``InjectedToolArg`` 注入，**不**进入 args_schema，
+    也**不**进 prompt —— 这是 LangChain 1.x 中避免
+    ``PydanticInvalidForJsonSchema: core_schema.CallableSchema`` 的标准做法。
+    """
+
+    file_path: str = Field(
+        ...,
+        description=(
+            "workspace 下 PDF / DOCX 虚拟路径，必须以 /workspace/input/uploads/ 或 "
+            "/workspace/input/samples/ 开头，后缀为 .pdf 或 .docx。"
+        ),
+    )
+    return_images: bool | None = Field(
+        default=None,
+        description="是否抽取并保存图片；不传时取 MinerU 配置默认。",
+    )
+    save_zip_archive: bool | None = Field(
+        default=None,
+        description="是否把 MinerU 原始 ZIP 落盘到 output/mineru/zip/。",
+    )
+    save_middle_json: bool | None = Field(
+        default=None,
+        description="是否保留 MinerU 中间 JSON（layout / span 等元信息）。",
+    )
+    save_content_list: bool | None = Field(
+        default=None,
+        description="是否保留 MinerU content_list.json（按页/块结构化的内容清单）。",
+    )
+    skip_if_zip_exists: bool | None = Field(
+        default=None,
+        description="当 output/mineru/zip/{stem}.zip 已存在时直接复用，跳过 MinerU 调用。",
+    )
+    output_subdir: str | None = Field(
+        default=None,
+        description="自定义 MinerU 输出子目录（相对 workspace/output/mineru/），不传时取配置默认。",
+    )
 
 
 def _trace_metadata(*, runtime: ToolRuntime | None, file_path: str) -> dict[str, Any]:
@@ -111,7 +166,7 @@ def _parse_file_with_mineru_sync(
     save_content_list: bool | None = None,
     skip_if_zip_exists: bool | None = None,
     output_subdir: str | None = None,
-    runtime: ToolRuntime | None = None,
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     """Parse an uploaded PDF or Word document into Markdown and artifacts using MinerU."""
 
@@ -232,7 +287,7 @@ async def _parse_file_with_mineru_async(
     save_content_list: bool | None = None,
     skip_if_zip_exists: bool | None = None,
     output_subdir: str | None = None,
-    runtime: ToolRuntime | None = None,
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     """Async wrapper: off-load the blocking ``_parse_file_with_mineru_sync`` to a thread.
 
@@ -276,6 +331,7 @@ parse_file_with_mineru = StructuredTool.from_function(
         "from config; precise mode may take minutes and emits progress events "
         "via the custom stream mode."
     ),
+    args_schema=ParseFileWithMineruInput,
 )
 
 
