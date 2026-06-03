@@ -34,7 +34,6 @@ from standard_document_assistant.tools import (
     build_review_index,
     extract_standard_metadata,
     inspect_review_rules,
-    parse_document_with_mineru,
     parse_file_with_mineru,
     run_format_source_review,
     run_standard_review,
@@ -266,7 +265,10 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
         "skills": [parsing_skill],
     }
     if use_hitl:
-        parser_spec["interrupt_on"] = {"parse_file_with_mineru": True}
+        # 收紧 HITL 决策粒度：仅允许 approve / edit，reject 留作显式禁用场景
+        parser_spec["interrupt_on"] = {
+            "parse_file_with_mineru": {"allowed_decisions": ["approve", "edit"]}
+        }
 
     extractor_spec: dict[str, Any] = {
         "name": "extractor",
@@ -276,14 +278,16 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
         "skills": [extraction_skill],
     }
     if use_hitl:
-        extractor_spec["interrupt_on"] = {"extract_standard_metadata": True}
+        extractor_spec["interrupt_on"] = {
+            "extract_standard_metadata": {"allowed_decisions": ["approve", "edit"]}
+        }
 
     reviewer_spec: dict[str, Any] = {
         "name": "reviewer",
         "description": "执行标准文档内容轨和格式轨审核，调用标准审核工具写入报告、结果、trace 和 manifest。",
         "system_prompt": REVIEWER_PROMPT,
         "tools": [
-            parse_document_with_mineru,
+            parse_file_with_mineru,
             run_standard_review,
             run_format_source_review,
             inspect_review_rules,
@@ -294,10 +298,10 @@ def build_subagents(*, langgraph_server: bool = False) -> list[dict[str, Any]]:
     }
     if use_hitl:
         reviewer_spec["interrupt_on"] = {
-            "parse_document_with_mineru": True,
-            "run_standard_review": True,
-            "run_format_source_review": True,
-            "build_review_index": True,
+            "parse_file_with_mineru": {"allowed_decisions": ["approve", "edit"]},
+            "run_standard_review": {"allowed_decisions": ["approve", "edit"]},
+            "run_format_source_review": {"allowed_decisions": ["approve", "edit"]},
+            "build_review_index": {"allowed_decisions": ["approve", "edit"]},
         }
 
     return [
@@ -374,17 +378,16 @@ def build_standard_document_agent(*, strict_model: bool = False, langgraph_serve
         "response_format": AgentResult,  # 结构化最终输出
     }
     if hitl_enabled(langgraph_server=langgraph_server):
+        # 主 Agent 层只覆盖"主 Agent 直接调用"的工具。
+        # parse_file_with_mineru / extract_standard_metadata / run_standard_review /
+        # run_format_source_review / build_review_index 仅在 subagent 内被调用，
+        # 由 subagent 自己的 interrupt_on 触发；主 Agent 层不再重复声明。
+        # reject 留作显式禁用的场景。
         agent_kwargs["interrupt_on"] = {
-            "write_file": True,
-            "edit_file": True,
-            "parse_file_with_mineru": True,
-            "parse_document_with_mineru": True,
-            "extract_standard_metadata": True,
-            "run_standard_review": True,
-            "run_format_source_review": True,
-            "build_review_index": True,
-            "propose_memory_update": True,
-            "execute": True,
+            "write_file": {"allowed_decisions": ["approve", "edit"]},
+            "edit_file": {"allowed_decisions": ["approve", "edit"]},
+            "propose_memory_update": {"allowed_decisions": ["approve", "edit"]},
+            "execute": {"allowed_decisions": ["approve", "edit"]},
         }
     if checkpointer is not None:
         agent_kwargs["checkpointer"] = checkpointer

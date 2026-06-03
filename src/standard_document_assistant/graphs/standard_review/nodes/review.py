@@ -11,6 +11,7 @@ from typing import Any, Literal
 from langgraph.types import Command
 
 from standard_document_assistant.config import load_config
+from standard_document_assistant.graphs.standard_review.events import emit_event
 from standard_document_assistant.graphs.standard_review.state import StandardReviewState
 from standard_document_assistant.pathing import utc_now_iso
 from standard_document_assistant.review_core.llm_judge import (
@@ -22,23 +23,25 @@ from standard_document_assistant.review_core.rule_models import AuditIssue, Rule
 from standard_document_assistant.review_core.serialization import deserialize_document
 
 
-def judge_rules(state: StandardReviewState) -> dict[str, Any]:
+def judge_rules(state: StandardReviewState, runtime: Any = None) -> dict[str, Any]:
     if state.get("format_only"):
-        return {
-            "trace_events": [_event(state, "judge_rules", "skipped")],
+        result = {
+            "trace_events": [emit_event(state, "judge_rules", "skipped")],
         }
+        return _merge_coverage_check(state, result)
 
     config = load_config().standard_review
     if not config.enable_llm_review:
-        return _deterministic_judge(state, config=config)
+        return _merge_coverage_check(state, _deterministic_judge(state, config=config))
 
     try:
         judge = LLMSoftRuleJudge(config)
     except Exception as exc:
-        return {
+        result = {
             "errors": [f"LLM Judge 初始化失败：{exc}"],
-            "trace_events": [_event(state, "judge_rules", "failed")],
+            "trace_events": [emit_event(state, "judge_rules", "failed")],
         }
+        return _merge_coverage_check(state, result)
 
     parsed_payload = state.get("parsed_document") or {}
     document = deserialize_document(parsed_payload)
@@ -55,20 +58,22 @@ def judge_rules(state: StandardReviewState) -> dict[str, Any]:
     plans.extend(judge.plan(section_rules, document, scope_text_map))
 
     if not plans:
-        return {
+        result = {
             "warnings": ["未找到可执行的 LLM 审核计划，跳过内容轨。"],
-            "trace_events": [_event(state, "judge_rules", "empty")],
+            "trace_events": [emit_event(state, "judge_rules", "empty")],
         }
+        return _merge_coverage_check(state, result)
 
     file_name = parsed_payload.get("file_name") or state.get("content_path") or "standard"
     trace_id = state.get("trace_id") or state.get("job_id") or ""
     try:
         outcomes = judge.run_dual_route(plans, file_name=file_name, trace_id=trace_id)
     except Exception as exc:
-        return {
+        result = {
             "errors": [f"LLM 审核并发失败：{exc}"],
-            "trace_events": [_event(state, "judge_rules", "failed")],
+            "trace_events": [emit_event(state, "judge_rules", "failed")],
         }
+        return _merge_coverage_check(state, result)
 
     issues: list[dict[str, Any]] = []
     strategy_counter: Counter = Counter()
@@ -82,7 +87,7 @@ def judge_rules(state: StandardReviewState) -> dict[str, Any]:
                     insufficient_scopes.append(outcome.issue.scope)
 
     new_round = int(state.get("review_round") or 0) + 1
-    return {
+    result = {
         "issues": issues,
         "events": [
             {
@@ -98,7 +103,7 @@ def judge_rules(state: StandardReviewState) -> dict[str, Any]:
         "insufficient_scopes": insufficient_scopes,
         "review_round": new_round,
         "trace_events": [
-            _event(
+            emit_event(
                 state,
                 "judge_rules",
                 "success",
@@ -111,19 +116,22 @@ def judge_rules(state: StandardReviewState) -> dict[str, Any]:
             )
         ],
     }
+    return _merge_coverage_check(state, result)
 
 
 def quality_gate(
     state: StandardReviewState,
-) -> Command[Literal["widen_review_scope", "aggregate", "format_review"]]:
+    runtime: Any = None,
+) -> Command[Literal["widen_review_scope", "format_review"]]:
     """Decide whether to widen the review scope and rerun the judge.
 
     Routing logic:
     * if we haven't reached ``max_review_rounds`` and we collected at least
       one ``insufficient_context`` issue whose scope can be expanded to a
       ``full_document`` pass, go to ``widen_review_scope``;
-    * otherwise jump to ``aggregate`` (skipping the deterministic format
-      review if it was already executed).
+    * otherwise jump to ``format_review`` for the deterministic format
+      track; the format node itself decides whether to skip (no source
+      file) or run, and is reachable from both full and format-only flows.
     """
 
     config = load_config().standard_review
@@ -140,13 +148,12 @@ def quality_gate(
         and round_idx < max_rounds
     ):
         return Command(
-            update={"trace_events": [_event(state, "quality_gate", "widen")]},
+            update={"trace_events": [emit_event(state, "quality_gate", "widen")]},
             goto="widen_review_scope",
         )
-    next_node = "format_review" if not state.get("format_only") else "aggregate"
     return Command(
-        update={"trace_events": [_event(state, "quality_gate", "ok", {"next": next_node})]},
-        goto=next_node,
+        update={"trace_events": [emit_event(state, "quality_gate", "ok", {"next": "format_review"})]},
+        goto="format_review",
     )
 
 
@@ -176,7 +183,7 @@ def widen_review_scope(state: StandardReviewState) -> dict[str, Any]:
         "widened": True,
         "review_round": round_idx,
         "warnings": warnings,
-        "trace_events": [_event(state, "widen_review_scope", "success", {"round": round_idx})],
+        "trace_events": [emit_event(state, "widen_review_scope", "success", {"round": round_idx})],
     }
 
 
@@ -194,7 +201,7 @@ def retrieve_for_widen(state: StandardReviewState) -> dict[str, Any]:
     except Exception as exc:
         return {
             "errors": [f"知识库构建失败：{exc}"],
-            "trace_events": [_event(state, "reload_review_rules", "failed")],
+            "trace_events": [emit_event(state, "reload_review_rules", "failed")],
         }
     full_rules = [rule for rule in kb.rules if rule.analysis_mode == "full_document"]
     section_rules: list[RuleItem] = []
@@ -226,7 +233,7 @@ def retrieve_for_widen(state: StandardReviewState) -> dict[str, Any]:
             "partial_mode": "full_document",
             "reloaded_for_round": state.get("review_round"),
         },
-        "trace_events": [_event(state, "reload_review_rules", "success", {"rules": len(section_rule_dicts) + len(full_rule_dicts)})],
+        "trace_events": [emit_event(state, "reload_review_rules", "success", {"rules": len(section_rule_dicts) + len(full_rule_dicts)})],
     }
 
 
@@ -274,20 +281,100 @@ def _deterministic_judge(state: StandardReviewState, *, config) -> dict[str, Any
         issue_no += 1
     return {
         "issues": issues,
-        "trace_events": [_event(state, "judge_rules", "deterministic", {"issues": len(issues)})],
+        "trace_events": [emit_event(state, "judge_rules", "deterministic", {"issues": len(issues)})],
     }
 
 
-def _event(state: StandardReviewState, node: str, status: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "trace_id": state.get("trace_id", ""),
-        "job_id": state.get("job_id", ""),
-        "component": "standard_review_graph",
-        "node": node,
-        "event": node,
-        "status": status,
-        "created_at": utc_now_iso(),
+def _merge_coverage_check(state: StandardReviewState, result: dict[str, Any]) -> dict[str, Any]:
+    """在 ``judge_rules`` 任意返回路径上叠加 scope 覆盖检查的结果。
+
+    覆盖检查：对所有 ``section_rule_objects`` 与 ``full_document_rule_objects`` 的
+    ``target_scopes``，若文档没有为该 scope 提供内容（``scope_text_map`` 为空或
+    未在 ``active_scope_keys`` 中），则生成一条 ``status="warn"`` 的 issue，
+    提示「应当存在但缺失的章节」。该检查不依赖 LLM，确保离线/失败路径仍能
+    给出结构性警告。
+    """
+    coverage = _scope_coverage_check(state)
+    if coverage["issues"]:
+        result.setdefault("issues", []).extend(coverage["issues"])
+    if coverage["trace_events"]:
+        result.setdefault("trace_events", []).extend(coverage["trace_events"])
+    if coverage["warnings"]:
+        result.setdefault("warnings", []).extend(coverage["warnings"])
+    return result
+
+
+def _scope_coverage_check(state: StandardReviewState) -> dict[str, Any]:
+    """为「应当存在但缺失」的目标 scope 产生 ``warn`` 级别 issue。
+
+    判定缺失：仅依赖 ``scope_text_map[scope]`` 是否为空字符串（被分类为
+    章节后是否解析到对应正文）。``active_scope_keys`` 已包含所有分类的
+    scope，不能用作「激活」信号。
+    """
+    scope_text_map = dict(state.get("scope_text_map") or {})
+    content_path = state.get("content_path", "")
+
+    section_rule_dicts = list(state.get("section_rule_objects") or [])
+    full_rule_dicts = list(state.get("full_document_rule_objects") or [])
+    all_rules = section_rule_dicts + full_rule_dicts
+
+    required_scopes: dict[str, dict[str, Any]] = {}
+    for rule in all_rules:
+        targets = list(rule.get("target_scopes") or [])
+        if not targets and rule.get("scope"):
+            targets = [str(rule.get("scope"))]
+        for target in targets:
+            if target and target not in required_scopes:
+                required_scopes[target] = rule
+
+    issues: list[dict[str, Any]] = []
+    issue_no = 1
+    for scope, rule in sorted(required_scopes.items()):
+        text = (scope_text_map.get(scope) or "").strip()
+        if text:
+            continue
+        rule_id = str(rule.get("chunk_id") or rule.get("rule_id") or "")
+        title = str(rule.get("title") or rule.get("rule_name") or scope)
+        issue = AuditIssue(
+            issue_id=f"COVERAGE-{rule_id or scope}-{issue_no:03d}",
+            file_name=content_path,
+            rule_id=rule_id or f"SCOPE-{scope}",
+            rule_name=title,
+            scope=scope,
+            severity="中度",
+            status="warn",
+            expected=str(rule.get("content") or rule.get("text") or f"标准应包含 {scope} 章节。"),
+            actual=f"未在文档中定位到 {scope} 章节（既无标题也无对应正文）。",
+            evidence_text="",
+            source_ref=str(rule.get("source_ref", "")),
+            suggestion=f"补充 {scope} 章节；若确无相关条目，应在文中显式说明。",
+            confidence=0.6,
+            llm_reasoning="基于规则 target_scopes 的存在性检查：文档应包含此章节但缺失。",
+        )
+        issue.extras["strategy"] = "scope_coverage"
+        issues.append(_issue_to_state_payload(issue))
+        issue_no += 1
+
+    return {
+        "issues": issues,
+        "warnings": [],
+        "trace_events": (
+            [
+                emit_event(
+                    state,
+                    "judge_rules",
+                    "coverage_check",
+                    {"missing_scopes": [issue["scope"] for issue in issues]},
+                )
+            ]
+            if issues
+            else []
+        ),
     }
-    if extra:
-        payload.update(extra)
-    return payload
+
+
+# 旧 _event 辅助函数已迁移至 ``standard_document_assistant.graphs.standard_review.events.emit_event``，
+# 保留注释说明迁移路径（2026-06-03 rev. 3）：
+# - 旧 _event 仅写 state["trace_events"]，未推送流；
+# - 新 emit_event 既写 state["trace_events"]，也通过 get_stream_writer 推送 ``review.*`` 事件；
+# - payload schema 完全兼容（多 type 字段来自新流式订阅，前端通过 stream_mode="custom" 消费）。

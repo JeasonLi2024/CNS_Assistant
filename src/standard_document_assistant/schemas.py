@@ -63,7 +63,8 @@ class MinerUParseResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     error: str = ""
     duration_ms: int = 0
-    resumed_from_zip: bool = False
+    # 工具层不实现断点续跑：若本地 ZIP 缓存命中，仅作性能优化，不再视为恢复
+    zip_cache_hit: bool = False
 
 
 class StandardMetadataExtraction(BaseModel):

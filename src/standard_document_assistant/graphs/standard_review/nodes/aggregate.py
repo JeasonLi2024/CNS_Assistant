@@ -1,15 +1,23 @@
-"""Aggregate subgraph: per (route, scope) scope_summary + status rollup."""
+"""Aggregate subgraph: per (route, scope) scope_summary + status rollup.
+
+Stream events (2026-06-03 rev. 3): uses shared ``emit_event`` helper to
+both append to ``state["trace_events"]`` and push ``review.aggregate.*``
+via ``get_stream_writer`` for unified ``<domain>.<stage>`` namespace.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
 from typing import Any
 
+from standard_document_assistant.graphs.standard_review.events import emit_event
 from standard_document_assistant.graphs.standard_review.state import StandardReviewState
-from standard_document_assistant.pathing import utc_now_iso
 
 
-def aggregate(state: StandardReviewState) -> dict[str, Any]:
+def aggregate(
+    state: StandardReviewState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     issues = state.get("issues") or []
     statuses = Counter(item.get("status", "") for item in issues)
     severities = Counter(item.get("severity", "") for item in issues)
@@ -59,20 +67,11 @@ def aggregate(state: StandardReviewState) -> dict[str, Any]:
         "aggregate_summary": summary,
         "status": final_status,
         "final_status": final_status,
-        "trace_events": [_event(state, "aggregate", "success", {"buckets": len(scope_buckets)})],
+        "trace_events": [emit_event(state, "aggregate", "success", {"buckets": len(scope_buckets)})],
     }
 
 
-def _event(state: StandardReviewState, node: str, status: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "trace_id": state.get("trace_id", ""),
-        "job_id": state.get("job_id", ""),
-        "component": "standard_review_graph",
-        "node": node,
-        "event": node,
-        "status": status,
-        "created_at": utc_now_iso(),
-    }
-    if extra:
-        payload.update(extra)
-    return payload
+# 旧 _event 辅助函数已迁移至 ``standard_document_assistant.graphs.standard_review.events.emit_event``。
+# 旧 _event 仅写 state["trace_events"]；新 emit_event 既写 state["trace_events"]，也通过
+# get_stream_writer 推送 ``review.aggregate.*`` 事件，与 MinerU ``mineru.*``、langextract
+# ``meta.*`` 形成统一 ``<domain>.<stage>`` 命名空间（2026-06-03 rev. 3）。

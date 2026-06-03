@@ -45,7 +45,7 @@ d:\deep-agents\
 │   ├── agent.py                   # 主 Agent + middleware + permissions + subagents
 │   ├── artifacts.py               # 产物下载链接、注册器
 │   ├── tools/
-│   │   ├── parser.py              # parse_file_with_mineru / parse_document_with_mineru
+│   │   ├── parser.py              # parse_file_with_mineru（sync + async 双实现）
 │   │   ├── metadata.py            # extract_standard_metadata
 │   │   ├── review.py              # 6 个审核工具（含 build_review_index）
 │   │   └── validation.py          # validate_output_schema / propose_memory_update
@@ -129,7 +129,7 @@ d:\deep-agents\
 
 | 名称 | 主要工具 | 何时调用 | 关键约束 |
 |---|---|---|---|
-| **parser** | `parse_file_with_mineru` / `parse_document_with_mineru` | 用户上传 PDF/DOCX，缺 Markdown/manifest 时 | 强制 HITL；先返回 `virtual_md_path` + `cover_metadata` |
+| **parser** | `parse_file_with_mineru` | 用户上传 PDF/DOCX，缺 Markdown/manifest 时 | 强制 HITL；先返回 `virtual_md_path` + `cover_metadata` |
 | **extractor** | `extract_standard_metadata` | 输入已是 Markdown / MinerU 路径时 | 不得先读取全文；不得调用 `write_todos`；无需 SKILL 加载 |
 | **reviewer** | 6 个审核工具（含 `build_review_index`、`inspect_review_rules`） | 进入审核流程 | HITL 覆盖解析/审核/索引；返回 4 路径 + scope_summary + audit_summary |
 | **research** | 检索类 | 文档生成前的参考检索 | 仅在 writer 委派时使用 |
@@ -167,8 +167,7 @@ description: 触发条件 + 能力概述 + 边界（满足 Deep Agents SkillsMid
 
 ### 5.1 Parser 工具
 
-- `parse_file_with_mineru(file_path, ...)` — 真实路径入口；先做路径与大小检查，再调 MinerU 客户端。
-- `parse_document_with_mineru(file_path, ...)` — Deep Agents 虚拟路径入口；解析后把 manifest + markdown 写入 `/workspace/input/uploads/...`，返回 `virtual_md_path` 与 `cover_metadata`。
+- `parse_file_with_mineru(file_path, ...)` — 入口；`StructuredTool.from_function` 同时暴露 sync 与 async 实现，统一处理 `/workspace/...` 虚拟路径与宿主真实路径；先做路径与大小检查，再调 MinerU 客户端；返回 `virtual_md_path` + `cover_metadata`。
 - **MinerU 客户端** 见 [integrations/mineru/](file:///d:/deep-agents/src/standard_document_assistant/integrations/mineru/)：
   - `api_mode=local` → 走自建 `/file_parse`（pipeline 模式，解析方法 `auto`）。
   - `api_mode=precise` → 走 `mineru.net` 异步轮询（`vlm` 版本，间隔 3s，超时 600s）。
@@ -439,7 +438,7 @@ agent = build_standard_document_agent(strict_model=True)
 |---|---|---|
 | `write_file` / `edit_file` | 写产物 | 主 Agent |
 | `execute` | 执行命令 | 主 Agent |
-| `parse_file_with_mineru` / `parse_document_with_mineru` | 调用 MinerU 解析 | 主 Agent + parser subagent |
+| `parse_file_with_mineru` | 调用 MinerU 解析 | 主 Agent + parser subagent |
 | `extract_standard_metadata` | LLM 抽取 | 主 Agent + extractor subagent |
 | `run_standard_review` / `run_format_source_review` | 审核 | 主 Agent + reviewer subagent |
 | `build_review_index` | 重建 FAISS | 主 Agent + reviewer subagent |
@@ -452,7 +451,17 @@ agent = build_standard_document_agent(strict_model=True)
 ## 12. 安装与运行
 
 ```bash
-# 1. 安装依赖（建议 Python 3.10+）
+# 0. 创建并激活虚拟环境（建议 Python 3.10+）
+# Windows PowerShell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+# Windows CMD
+python -m venv .venv
+.\.venv\Scripts\activate.bat
+# 如遇 PowerShell 执行策略拦截激活脚本，先以管理员执行：
+# Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+
+# 1. 安装依赖（在已激活的虚拟环境中执行）
 pip install -r requirements.txt
 # 关键包：deepagents, langgraph>=1.0, langchain>=1.0, langchain-openai,
 #         langchain-community, faiss-cpu, python-docx, lxml, pymupdf, dashscope

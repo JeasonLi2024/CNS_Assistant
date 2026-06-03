@@ -15,10 +15,11 @@ def test_agent_registration_uses_new_tools_only() -> None:
     assert [tool_name(tool) for tool in parser["tools"]] == ["parse_file_with_mineru"]
     assert "extract_standard_metadata" in [tool_name(tool) for tool in extractor["tools"]]
     assert [tool_name(tool) for tool in reviewer["tools"]] == [
-        "parse_document_with_mineru",
+        "parse_file_with_mineru",
         "run_standard_review",
         "run_format_source_review",
         "inspect_review_rules",
+        "build_review_index",
         "validate_review_result_schema",
     ]
     assert {tool.__name__ for tool in STANDARD_DOCUMENT_TOOLS} == {

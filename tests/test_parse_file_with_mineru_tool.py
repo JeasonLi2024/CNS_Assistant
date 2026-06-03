@@ -19,7 +19,7 @@ def test_parse_file_with_mineru_accepts_docx(monkeypatch) -> None:
         thread_id="test-parse-docx",
     )
 
-    def fake_request_parse_file(file_path, config, *, return_images):
+    def fake_request_parse_file(file_path, config, *, return_images, on_event=None):
         assert file_path.suffix == ".docx"
         return b"PK fake zip"
 

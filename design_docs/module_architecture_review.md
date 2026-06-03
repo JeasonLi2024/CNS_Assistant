@@ -57,7 +57,7 @@
 ### 3.1 现状
 
 - HTTP 客户端：[`integrations/mineru/client.py`](file:///d:/deep-agents/src/standard_document_assistant/integrations/mineru/client.py) 支持 `local`（自建 `/file_parse`）和 `precise`（云端四步：申请 URL → PUT 上传 → 轮询 → 下载 ZIP）两种模式。
-- 工具封装：[`tools/parser.py`](file:///d:/deep-agents/src/standard_document_assistant/tools/parser.py) 用 `StructuredTool.from_function` 暴露 `parse_file_with_mineru` 和 `parse_document_with_mineru`（同一底层 `_parse_file_with_mineru_sync`）。
+- 工具封装：[`tools/parser.py`](file:///d:/deep-agents/src/standard_document_assistant/tools/parser.py) 用 `StructuredTool.from_function(func=, coroutine=)` 暴露 `parse_file_with_mineru`（sync 底层 + `asyncio.to_thread` async 包装）。
 - ZIP 解析：[`integrations/mineru/zip_parser.py`](file:///d:/deep-agents/src/standard_document_assistant/integrations/mineru/zip_parser.py) 处理 `_middle.json` / `layout.json` / `content_list.json` 与图片命名。
 - Skill：[`skills/standard-parsing/SKILL.md`](file:///d:/deep-agents/skills/standard-parsing/SKILL.md) 含 frontmatter（`name` / `description`）、调用模式表、`cover_metadata` 字段表、失败处理引用文件 `references/mineru-failures.md`。
 - Subagent：`parser` 在 [`agent.py:build_subagents`](file:///d:/deep-agents/src/standard_document_assistant/agent.py#L170-L186) 注册，`tools=[parse_file_with_mineru]`，`skills=[parsing_skill]`；HITL `interrupt_on={"parse_file_with_mineru": True}`。
@@ -138,7 +138,7 @@
 - 质量门控：[`graphs/standard_review/nodes/review.py:quality_gate`](file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/review.py#L101-L137) 用 `Command[Literal["widen_review_scope", "aggregate", "format_review"]]` 单次 return 同时更新 `trace_events` 与跳转。
 - Widen 回环：`widen_review_scope → reload_review_rules → judge_rules` 形成多轮回环，由 `max_review_rounds` 终止；`widened=True` 标记、`review_round` 自增。
 - 工具：[`tools/review.py`](file:///d:/deep-agents/src/standard_document_assistant/tools/review.py) 暴露 5 个：`run_standard_review` / `run_format_source_review` / `inspect_review_rules` / `build_review_index` / `validate_review_result_schema`；其中前 4 个在 subagent 与主 agent 两层都加了 HITL。
-- Subagent：`reviewer` 在 `agent.py:build_subagents` 注册，6 个工具 + 1 skill；`interrupt_on` 覆盖 `parse_document_with_mineru` / `run_standard_review` / `run_format_source_review` / `build_review_index`。
+- Subagent：`reviewer` 在 `agent.py:build_subagents` 注册，6 个工具 + 1 skill；`interrupt_on` 覆盖 `parse_file_with_mineru` / `run_standard_review` / `run_format_source_review` / `build_review_index`（`allowed_decisions: ["approve", "edit"]`）。
 - Skill：[`skills/standard-review/SKILL.md`](file:///d:/deep-agents/skills/standard-review/SKILL.md) 含子图拓扑图、双轨描述、Tool Set 表、Default Workflow、Artifact Layout、Knowledge Base 说明、Trace & Resumption 段落。
 - Reviewer AGENTS.md：[`subagents/reviewer/AGENTS.md`](file:///d:/deep-agents/subagents/reviewer/AGENTS.md) 6 步工作流 + 强约束（双文件、不得覆盖原始、不得伪造来源、依据不足标记）。
 - 产物 4 份：`report / result / trace / manifest`，全部 `/workspace/output/reviews/<job_id>/`；`scope_summary` 按 `(audit_track, scope)` 聚合；`audit_summary` LLM 报告摘要；`retrieval_trace` 含策略分布与命中规则数。

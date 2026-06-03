@@ -52,7 +52,7 @@ def test_run_standard_review_rejects_pdf_without_mineru_markdown() -> None:
     result = run_standard_review.invoke({"source_path": record.virtual_path})
 
     assert result["status"] == "failed"
-    assert "parse_document_with_mineru" in result["error"]
+    assert "parse_file_with_mineru" in result["error"]
 
 
 def test_run_standard_review_flags_missing_normative_references() -> None:

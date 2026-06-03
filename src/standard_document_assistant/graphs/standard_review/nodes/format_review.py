@@ -1,4 +1,9 @@
-"""Format review subgraph (deterministic DOCX/PDF checks)."""
+"""Format review subgraph (deterministic DOCX/PDF checks).
+
+Stream events (2026-06-03 rev. 3): uses shared ``emit_event`` helper to
+both append to ``state["trace_events"]`` and push ``review.format.*`` via
+``get_stream_writer`` for unified ``<domain>.<stage>`` namespace.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from standard_document_assistant.constants import OUTPUT_DIR, UPLOADS_DIR
+from standard_document_assistant.graphs.standard_review.events import emit_event
 from standard_document_assistant.graphs.standard_review.state import StandardReviewState
-from standard_document_assistant.pathing import resolve_workspace_read_path, utc_now_iso
+from standard_document_assistant.pathing import resolve_workspace_read_path
 from standard_document_assistant.review_core.format_audit import run_format_source_audit
 from standard_document_assistant.review_core.pdf_format_parser import parse_pdf_format_file
 from standard_document_assistant.review_core.rule_models import AuditIssue
@@ -15,18 +21,21 @@ from standard_document_assistant.review_core.word_parser import parse_word_file
 from standard_document_assistant.schemas import ReviewIssue
 
 
-def format_review(state: StandardReviewState) -> dict[str, Any]:
+def format_review(
+    state: StandardReviewState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     source = state.get("source_path", "")
     if not source:
         return {
             "warnings": ["未提供原始 PDF/DOCX，格式轨审核已跳过。"],
-            "trace_events": [_event(state, "format_review", "skipped")],
+            "trace_events": [emit_event(state, "format_review", "skipped")],
         }
     suffix = Path(source).suffix.lower()
     if suffix not in {".pdf", ".docx"}:
         return {
             "warnings": ["源文件不是 PDF/DOCX，格式轨审核已跳过。"],
-            "trace_events": [_event(state, "format_review", "skipped")],
+            "trace_events": [emit_event(state, "format_review", "skipped")],
         }
     try:
         source_host, source_virtual = resolve_workspace_read_path(
@@ -38,7 +47,7 @@ def format_review(state: StandardReviewState) -> dict[str, Any]:
         return {
             "errors": [f"源文件不可读取：{exc}"],
             "warnings": [f"源文件不可读取，格式轨将跳过：{exc}"],
-            "trace_events": [_event(state, "format_review", "failed")],
+            "trace_events": [emit_event(state, "format_review", "failed")],
         }
     try:
         if suffix == ".docx":
@@ -96,7 +105,7 @@ def format_review(state: StandardReviewState) -> dict[str, Any]:
         "warnings": warnings,
         "format_facts": format_trace,
         "trace_events": [
-            _event(
+            emit_event(
                 state,
                 "format_review",
                 "success",
@@ -145,16 +154,7 @@ def _source_audit_issue_to_review_issue(issue: AuditIssue, source_virtual: str) 
     )
 
 
-def _event(state: StandardReviewState, node: str, status: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "trace_id": state.get("trace_id", ""),
-        "job_id": state.get("job_id", ""),
-        "component": "standard_review_graph",
-        "node": node,
-        "event": node,
-        "status": status,
-        "created_at": utc_now_iso(),
-    }
-    if extra:
-        payload.update(extra)
-    return payload
+# 旧 _event 辅助函数已迁移至 ``standard_document_assistant.graphs.standard_review.events.emit_event``。
+# 旧 _event 仅写 state["trace_events"]；新 emit_event 既写 state["trace_events"]，也通过
+# get_stream_writer 推送 ``review.format.*`` 事件，与 MinerU ``mineru.*``、langextract
+# ``meta.*`` 形成统一 ``<domain>.<stage>`` 命名空间（2026-06-03 rev. 3）。

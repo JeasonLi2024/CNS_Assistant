@@ -14,4 +14,6 @@ workspace/tmp/*
 !workspace/input/.gitkeep
 !workspace/output/.gitkeep
 !workspace/tmp/.gitkeep
+# 临时测试输出（2026-06-03：避免测试日志误入 commit）
+test_output.log
 

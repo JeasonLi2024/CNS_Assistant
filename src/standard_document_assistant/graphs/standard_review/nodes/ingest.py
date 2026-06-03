@@ -3,6 +3,10 @@
 Reads the manifest, the MinerU Markdown content, and (optionally) the
 source DOCX/PDF for the format track. Stores everything on state under
 ``parsed_document`` and ``scope_text_map``.
+
+Stream events (2026-06-03 rev. 3): uses shared ``emit_event`` helper to
+both append to ``state["trace_events"]`` and push ``review.ingest.*`` via
+``get_stream_writer`` for unified ``<domain>.<stage>`` namespace.
 """
 
 from __future__ import annotations
@@ -14,20 +18,20 @@ from typing import Any
 
 from standard_document_assistant.config import load_config
 from standard_document_assistant.constants import OUTPUT_DIR, UPLOADS_DIR
+from standard_document_assistant.graphs.standard_review.events import emit_event
 from standard_document_assistant.graphs.standard_review.state import StandardReviewState
 from standard_document_assistant.pathing import (
     resolve_workspace_read_path,
-    utc_now_iso,
 )
 from standard_document_assistant.review_core.doc_parser import parse_markdown_document
 from standard_document_assistant.review_core.scopes import build_scope_text_map, normalize_scope_keys
 from standard_document_assistant.review_core.serialization import serialize_document
 
 
-def ingest(state: StandardReviewState) -> dict[str, Any]:
+def ingest(state: StandardReviewState, runtime: Any = None) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
-    trace = [_event(state, "ingest", "started")]
+    trace = [emit_event(state, "ingest", "started")]
 
     content_path = state.get("content_path", "")
     source_path = state.get("source_path", "")
@@ -80,16 +84,19 @@ def ingest(state: StandardReviewState) -> dict[str, Any]:
             ),
             "errors": errors,
             "warnings": warnings,
-            "trace_events": trace + [_event(state, "ingest", "format_only")],
+            "trace_events": trace + [emit_event(state, "ingest", "format_only")],
         }
 
     if not content_path:
-        errors.append("缺少 content_path 或可解析的 manifest_path。")
+        errors.append(
+            "缺少 content_path 或可解析的 manifest_path。"
+            "若源文件是 PDF/DOCX，请先调用 parse_file_with_mineru 解析后再传入 Markdown 路径。"
+        )
         return {
             "status": "failed",
             "errors": errors,
             "warnings": warnings,
-            "trace_events": trace + [_event(state, "ingest", "failed")],
+            "trace_events": trace + [emit_event(state, "ingest", "failed")],
         }
 
     try:
@@ -104,7 +111,7 @@ def ingest(state: StandardReviewState) -> dict[str, Any]:
             "status": "failed",
             "errors": errors,
             "warnings": warnings,
-            "trace_events": trace + [_event(state, "ingest", "failed")],
+            "trace_events": trace + [emit_event(state, "ingest", "failed")],
         }
 
     markdown = content_host.read_text(encoding="utf-8", errors="ignore")
@@ -159,7 +166,7 @@ def ingest(state: StandardReviewState) -> dict[str, Any]:
         ),
         "errors": errors,
         "warnings": warnings,
-        "trace_events": trace + [_event(state, "ingest", "success", {"scope_count": len(scope_text_map)})],
+        "trace_events": trace + [emit_event(state, "ingest", "success", {"scope_count": len(scope_text_map)})],
     }
 
 
@@ -216,16 +223,7 @@ def _split_markdown_fallback(markdown: str) -> tuple[str, str, str, str]:
     )
 
 
-def _event(state: StandardReviewState, node: str, status: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "trace_id": state.get("trace_id", ""),
-        "job_id": state.get("job_id", ""),
-        "component": "standard_review_graph",
-        "node": node,
-        "event": node,
-        "status": status,
-        "created_at": utc_now_iso(),
-    }
-    if extra:
-        payload.update(extra)
-    return payload
+# 旧 _event 辅助函数已迁移至 ``standard_document_assistant.graphs.standard_review.events.emit_event``。
+# 旧 _event 仅写 state["trace_events"]；新 emit_event 既写 state["trace_events"]，也通过
+# get_stream_writer 推送 ``review.ingest.*`` 事件，与 MinerU ``mineru.*``、langextract
+# ``meta.*`` 形成统一 ``<domain>.<stage>`` 命名空间（2026-06-03 rev. 3）。

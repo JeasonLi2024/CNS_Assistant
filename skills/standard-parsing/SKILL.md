@@ -1,6 +1,6 @@
 ---
 name: standard-parsing
-description: 当用户上传 PDF 或 Word 标准文档、需要版式还原或扫描件 OCR 解析为 Markdown 时使用；指导调用 parse_file_with_mineru 并返回产物路径。
+description: 仅在输入是 /workspace/input/uploads/** 或 /workspace/input/samples/** 下后缀为 .pdf 或 .docx 的标准文档时使用；调用 parse_file_with_mineru 还原版式、抽取封面元信息并落盘到 /workspace/output/mineru。已有 Markdown / content_list 时不要再次解析。
 ---
 
 # Standard Parsing

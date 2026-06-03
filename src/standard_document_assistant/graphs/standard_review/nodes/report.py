@@ -1,4 +1,10 @@
-"""Report subgraph: write outputs (result/trace/report/manifest) + LLM audit summary."""
+"""Report subgraph: write outputs (result/trace/report/manifest) + LLM audit summary.
+
+Stream events (2026-06-03 rev. 3): uses shared ``emit_event`` helper to
+both append to ``state["trace_events"]`` and push ``review.report.*`` /
+``review.manifest.*`` via ``get_stream_writer`` for unified
+``<domain>.<stage>`` namespace.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +14,7 @@ from typing import Any
 
 from standard_document_assistant.config import load_config
 from standard_document_assistant.constants import REVIEWS_OUTPUT_DIR
+from standard_document_assistant.graphs.standard_review.events import emit_event
 from standard_document_assistant.graphs.standard_review.state import StandardReviewState
 from standard_document_assistant.pathing import (
     allocate_unique_path,
@@ -84,11 +91,14 @@ def write_outputs(state: StandardReviewState) -> dict[str, Any]:
         "trace_payload": trace_payload,
         "audit_summary": audit_summary.to_dict() if audit_summary else {},
         "output_paths": paths,
-        "trace_events": [_event(state, "write_outputs", "success")],
+        "trace_events": [emit_event(state, "write_outputs", "success")],
     }
 
 
-def write_manifest(state: StandardReviewState) -> dict[str, Any]:
+def write_manifest(
+    state: StandardReviewState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     output_paths = dict(state.get("output_paths") or {})
     output_dir = REVIEWS_OUTPUT_DIR / safe_name(state.get("output_subdir") or state.get("job_id") or "")
     stem = safe_name(Path(state.get("content_path") or "standard").stem, fallback="standard")
@@ -123,7 +133,7 @@ def write_manifest(state: StandardReviewState) -> dict[str, Any]:
     output_paths["manifest"] = host_to_virtual_path(manifest_path)
     return {
         "output_paths": output_paths,
-        "trace_events": [_event(state, "write_manifest", "success")],
+        "trace_events": [emit_event(state, "write_manifest", "success")],
     }
 
 
@@ -200,16 +210,8 @@ def _maybe_audit_summary(issues: list[AuditIssue], *, file_name: str):
         return None
 
 
-def _event(state: StandardReviewState, node: str, status: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "trace_id": state.get("trace_id", ""),
-        "job_id": state.get("job_id", ""),
-        "component": "standard_review_graph",
-        "node": node,
-        "event": node,
-        "status": status,
-        "created_at": utc_now_iso(),
-    }
-    if extra:
-        payload.update(extra)
-    return payload
+# 旧 _event 辅助函数已迁移至 ``standard_document_assistant.graphs.standard_review.events.emit_event``。
+# 旧 _event 仅写 state["trace_events"]；新 emit_event 既写 state["trace_events"]，也通过
+# get_stream_writer 推送 ``review.report.*`` / ``review.manifest.*`` 事件，与 MinerU
+# ``mineru.*``、langextract ``meta.*`` 形成统一 ``<domain>.<stage>`` 命名空间
+# （2026-06-03 rev. 3）。

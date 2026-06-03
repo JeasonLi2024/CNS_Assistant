@@ -1,4 +1,9 @@
-"""Retrieve subgraph for standard review (FAISS + 全文规则)."""
+"""Retrieve subgraph for standard review (FAISS + 全文规则).
+
+Stream events (2026-06-03 rev. 3): uses shared ``emit_event`` helper to
+both append to ``state["trace_events"]`` and push ``review.retrieve.*``
+via ``get_stream_writer`` for unified ``<domain>.<stage>`` namespace.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +11,8 @@ from typing import Any
 
 from standard_document_assistant.config import load_config
 from standard_document_assistant.constants import PROJECT_ROOT
+from standard_document_assistant.graphs.standard_review.events import emit_event
 from standard_document_assistant.graphs.standard_review.state import StandardReviewState
-from standard_document_assistant.pathing import utc_now_iso
 from standard_document_assistant.review_core.knowledge_base import (
     filter_content_audit_rules,
     load_knowledge_base,
@@ -16,7 +21,10 @@ from standard_document_assistant.review_core.rule_models import RuleItem
 from standard_document_assistant.review_core.scopes import filter_rules_for_partial_mode, normalize_scope_keys
 
 
-def retrieve_rules(state: StandardReviewState) -> dict[str, Any]:
+def retrieve_rules(
+    state: StandardReviewState,
+    runtime: Any = None,
+) -> dict[str, Any]:
     config = load_config().standard_review
     force = bool(state.get("force_rebuild_index")) or bool(config.auto_rebuild_index)
     try:
@@ -26,7 +34,7 @@ def retrieve_rules(state: StandardReviewState) -> dict[str, Any]:
     except Exception as exc:
         return {
             "errors": [f"知识库构建失败：{exc}"],
-            "trace_events": [_event(state, "retrieve_rules", "failed")],
+            "trace_events": [emit_event(state, "retrieve_rules", "failed")],
         }
 
     rules = filter_content_audit_rules(kb.rules)
@@ -101,7 +109,7 @@ def retrieve_rules(state: StandardReviewState) -> dict[str, Any]:
             "partial_mode": partial_mode,
         },
         "trace_events": [
-            _event(
+            emit_event(
                 state,
                 "retrieve_rules",
                 "success",
@@ -117,16 +125,7 @@ def _rule_to_dict(rule: RuleItem, *, matched_scope: str) -> dict[str, Any]:
     return payload
 
 
-def _event(state: StandardReviewState, node: str, status: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "trace_id": state.get("trace_id", ""),
-        "job_id": state.get("job_id", ""),
-        "component": "standard_review_graph",
-        "node": node,
-        "event": node,
-        "status": status,
-        "created_at": utc_now_iso(),
-    }
-    if extra:
-        payload.update(extra)
-    return payload
+# 旧 _event 辅助函数已迁移至 ``standard_document_assistant.graphs.standard_review.events.emit_event``。
+# 旧 _event 仅写 state["trace_events"]；新 emit_event 既写 state["trace_events"]，也通过
+# get_stream_writer 推送 ``review.retrieve.*`` 事件，与 MinerU ``mineru.*``、langextract
+# ``meta.*`` 形成统一 ``<domain>.<stage>`` 命名空间（2026-06-03 rev. 3）。
