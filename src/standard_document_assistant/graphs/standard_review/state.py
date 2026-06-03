@@ -54,3 +54,25 @@ class StandardReviewState(TypedDict, total=False):
     widened: bool
     final_status: str
     status: str
+
+
+class StandardReviewContext(TypedDict, total=False):
+    """Runtime context for the standard review subgraph (Deep Agents).
+
+    节点通过 ``Runtime[StandardReviewContext]`` 读取横切关注点，避免污染
+    graph state。依据 LangGraph Runtime context 文档：
+    https://docs.langchain.com/oss/python/langgraph/graph-api#runtime-context
+
+    - ``trace_id``：父 agent 透传的 trace 关联 ID。
+    - ``tenant_id`` / ``user_id``：多租户隔离字段，未来由主 agent 透传。
+    - ``job_id``：子图输出物目录键。
+    - ``quality_strict``：是否启用更严格的复核（影响 quality_gate 阈值）。
+    - ``parent_tool_call_id``：父 agent 的 tool_call_id，便于 LangSmith 反查。
+    """
+
+    trace_id: str
+    tenant_id: str
+    user_id: str
+    job_id: str
+    quality_strict: bool
+    parent_tool_call_id: str
