@@ -151,4 +151,32 @@ def test_direct_review_endpoint_calls_standard_review(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["passed"] is True
     assert calls["assistant_id"] == "standard_review"
+    assert calls["raise_error"] is True
     assert calls["input"]["target_scopes"] == ["scope", "normative_references"]
+
+
+def test_direct_review_endpoint_returns_502_on_upstream_error(monkeypatch) -> None:
+    class FakeRuns:
+        async def wait(self, thread_id, assistant_id, *, input, raise_error):
+            raise PermissionError("workspace output denied")
+
+    class FakeClient:
+        runs = FakeRuns()
+
+    monkeypatch.setattr(app_mod, "get_langgraph_client", lambda: FakeClient())
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/review-jobs/standard-review",
+        json={
+            "thread_id": "019e9086-917d-7050-be79-d18e651e33a4",
+            "file_path": "/workspace/input/uploads/review-test/draft.md",
+            "review_options": {
+                "mode": "scoped_content",
+                "target_scopes": ["foreword"],
+                "disable_widen": True,
+            },
+        },
+    )
+    assert response.status_code == 502
+    assert "标准审核执行失败" in response.json()["detail"]

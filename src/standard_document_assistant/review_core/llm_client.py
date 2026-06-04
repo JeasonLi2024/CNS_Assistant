@@ -84,16 +84,39 @@ class LLMClient:
             return FakeListChatModel(responses=[_fake_judge_response()])
 
     def chat(self, messages: list[BaseMessage]) -> str:
-        return self._chat_model.invoke(messages).content or ""
+        try:
+            return self._chat_model.invoke(messages).content or ""
+        except Exception as exc:
+            if _offline_fallback_enabled():
+                return _fake_judge_response(
+                    reasoning=(
+                        "本地离线降级：LLM Judge 连接不可用，未调用真实 LLM。"
+                        f"原始异常：{type(exc).__name__}。"
+                    ),
+                    actual=(
+                        "LLM Judge 连接不可用，本次使用本地保守判定结果，"
+                        "不代表真实模型审核结论。"
+                    ),
+                )
+            raise
 
 
-def _fake_judge_response() -> str:
+def _offline_fallback_enabled() -> bool:
+    value = os.getenv("STANDARD_DOC_LLM_OFFLINE_FALLBACK", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _fake_judge_response(
+    *,
+    reasoning: str = "本地离线模式：根据已提供的规则内容作出保守判定，未调用真实 LLM。",
+    actual: str = "未在文档中直接定位到符合要求的依据，建议人工复核。",
+) -> str:
     return json.dumps(
         {
-            "reasoning": "本地离线模式：根据已提供的规则内容作出保守判定，未调用真实 LLM。",
+            "reasoning": reasoning,
             "pass": False,
             "severity_level": "中度",
-            "actual": "未在文档中直接定位到符合要求的依据，建议人工复核。",
+            "actual": actual,
             "evidence_text": "依据不足。",
             "suggestion": "请补充相关章节或重新执行解析与检索。",
             "confidence": 0.2,

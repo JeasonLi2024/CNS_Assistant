@@ -1,19 +1,68 @@
-"""从 rules_test.md 重建 FAISS / TF-IDF 规则索引（CLI）。
+"""从 rules_test.md 重建标准审核规则的 FAISS / TF-IDF 向量索引（CLI）。
 
-与原 Skill
-``D:/Chinese_national_standards_docs_Review-SKILL/scripts/rebuild_rules_index.py``
-行为对齐：默认读取 ``src/standard_document_assistant/resources/review_rules/rules_test.md``，
-向同目录写出 ``rules.faiss`` + ``rules.faiss.meta.json`` + ``tfidf_vectorizer.pkl``。
+作用
+----
+- 与早期 Skill `D:/Chinese_national_standards_docs_Review-SKILL/scripts/
+  rebuild_rules_index.py` 行为对齐。
+- 默认从 `src/standard_document_assistant/resources/review_rules/rules_test.md`
+  读规则文本，向**同一目录**写出索引产物：
+  - FAISS 后端：`rules.faiss` + `rules.faiss.meta.json` + `tfidf_vectorizer.pkl`
+  - JSON 回退：`rules.faiss.json`（纯 Python TF-IDF，不依赖 `faiss-cpu` /
+    `scikit-learn`，保证 CI 在最小依赖下仍可跑）。
+- 当 `faiss-cpu` / `scikit-learn` 不可用时自动回退到 JSON 后端。
+- 退出码：`0` = 成功；`2` = 重建失败。
 
-在 ``faiss-cpu`` / ``scikit-learn`` 不可用的环境下，自动退到
-``rules.faiss.json``（纯 Python TF-IDF），保证 CI 仍然可跑。
+参数
+----
+- `--rules-md <path>`：规则 markdown 路径；缺省沿用配置中
+  `standard_review.rules_md`。
+- `--index-dir <path>`：索引输出目录；缺省沿用配置中
+  `standard_review.index_dir`。
+- `--backend {auto,faiss,tfidf_json}`：
+  - `auto`（默认）：FAISS 优先，失败回退到 `tfidf_json`；
+  - `faiss`：仅 FAISS，不允许回退；
+  - `tfidf_json`：仅 JSON 后端。
+- `--force-rebuild`：忽略已有索引，强制重建。
 
-Windows 用法（在项目根目录）：
+使用方式
+-------
+在项目根目录 `d:\\deep-agents\\` 下执行：
 
 ```powershell
+# 用配置默认值，auto 后端
 python scripts/rebuild_rules_index.py
+
+# 强制重建，FAISS 后端（不允许回退）
 python scripts/rebuild_rules_index.py --backend faiss --force-rebuild
+
+# 仅跑纯 Python TF-IDF 后端
 python scripts/rebuild_rules_index.py --backend tfidf_json
+
+# 自定义规则 / 输出目录
+python scripts/rebuild_rules_index.py --rules-md path/to/rules.md --index-dir path/to/index
+```
+
+环境与副作用
+------------
+- 自动设置 `LANGSMITH_TRACING=false` / `LANGCHAIN_TRACING_V2=false`，
+  避免 CLI 触发 LangSmith 网络调用。
+- 会调用 `standard_document_assistant.config.load_config()` 读取
+  `config.yaml`，再用 `dataclasses.replace` 临时覆盖 `rules_md` /
+  `index_dir` 后喂给 `load_knowledge_base`。
+- 如果 `index_dir` 与 `constants.REVIEW_RULES_DIR` 解析到同一路径，
+  会打印一行确认信息，便于人工核对。
+
+输出
+----
+成功时打印形如：
+```
+[rebuild] rules:    ...\resources\review_rules\rules_test.md
+[rebuild] index:    ...\resources\review_rules
+[rebuild] backend:  auto
+[rebuild] force:    False
+[rebuild] done: rules=NN backend=faiss source=rebuilt
+[rebuild] file: ... exists=True size=NNNNN
+[rebuild] index_dir 与常量 REVIEW_RULES_DIR 一致。
 ```
 """
 

@@ -42,7 +42,8 @@ ingest → retrieve_rules → judge_rules
 ## Instructions
 
 1. **优先调用 `run_standard_review`**，不要手工拼接流程。
-2. PDF/Word 输入且缺少 Markdown / manifest 时，**先调用 `parse_file_with_mineru`**。修改 `rules_test.md`、切换嵌入模型、改变 `embedding_dim` 后，**先调用 `build_review_index`**，否则仍会命中旧索引。
+2. PDF/Word 输入且缺少 Markdown / manifest 时，**先调用 `parse_file_with_mineru`**。
+3. 修改 `rules_test.md`、切换嵌入模型、改变 `embedding_dim` 后，**先调用 `build_review_index`**，否则仍会命中旧索引。
 4. 只想预览会命中哪些规则时，**调用 `inspect_review_rules(query=..., scope=...)`**。
 5. 标准审核不需要先做元数据抽取；**不要把 `extract_standard_metadata` 作为固定前置步骤**。
 6. 所有路径必须使用 `/workspace/` 虚拟路径。

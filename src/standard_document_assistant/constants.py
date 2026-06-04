@@ -1,9 +1,19 @@
 """Project paths and constants."""
 
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE_ROOT = PROJECT_ROOT / "workspace"
+
+
+def _workspace_root() -> Path:
+    override = os.getenv("STANDARD_DOC_WORKSPACE_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    return PROJECT_ROOT / "workspace"
+
+
+WORKSPACE_ROOT = _workspace_root()
 INPUT_DIR = WORKSPACE_ROOT / "input"
 UPLOADS_DIR = INPUT_DIR / "uploads"
 SAMPLES_DIR = INPUT_DIR / "samples"

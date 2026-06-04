@@ -302,7 +302,7 @@ async def stream_standard_review(
 async def direct_standard_review(payload: DirectStandardReviewRequest) -> dict[str, Any]:
     """Run the standard_review graph directly for machine workflows."""
 
-    thread_id = payload.thread_id or f"review-{uuid.uuid4().hex[:12]}"
+    thread_id = payload.thread_id or str(uuid.uuid4())
     state = _build_direct_review_state(payload)
     client = get_langgraph_client()
     try:
@@ -310,7 +310,7 @@ async def direct_standard_review(payload: DirectStandardReviewRequest) -> dict[s
             thread_id,
             "standard_review",
             input=state,
-            raise_error=False,
+            raise_error=True,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"标准审核执行失败：{exc}") from exc
@@ -323,7 +323,7 @@ async def direct_standard_review(payload: DirectStandardReviewRequest) -> dict[s
 async def direct_standard_review_stream(payload: DirectStandardReviewRequest) -> StreamingResponse:
     """Run the standard_review graph directly and stream graph events."""
 
-    thread_id = payload.thread_id or f"review-{uuid.uuid4().hex[:12]}"
+    thread_id = payload.thread_id or str(uuid.uuid4())
     state = _build_direct_review_state(payload)
     return StreamingResponse(
         _stream_direct_review_events(thread_id=thread_id, payload=payload, state=state),

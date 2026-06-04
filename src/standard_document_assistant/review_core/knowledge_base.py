@@ -148,10 +148,13 @@ class RuleKnowledgeBase:
         self._faiss_retriever = {
             str(index_path.resolve()): retriever,
         }
+        if self.index is not None:
+            self.index.save(index_path)
         return {
             "index_path": str(index_path / "rules.faiss"),
             "meta_path": str(index_path / "rules.faiss.meta.json"),
             "vectorizer_path": str(index_path / "tfidf_vectorizer.pkl"),
+            "json_path": str(index_path / "rules.faiss.json"),
             "rules_total": len(self.rules),
         }
 
@@ -247,13 +250,16 @@ def load_knowledge_base(
         index_dir / "tfidf_vectorizer.pkl",
     )
     faiss_json_path = index_dir / "rules.faiss.json"
+    rules_mtime = rules_path.stat().st_mtime if rules_path.exists() else 0.0
 
     faiss_available = backend in ("auto", "faiss")
     tfidf_available = backend in ("auto", "tfidf_json")
 
     # ---- 阶段 1：磁盘加载（不重建） ----
     if not force_rebuild:
-        if faiss_available and all(p.exists() for p in faiss_triplet):
+        if faiss_available and all(p.exists() for p in faiss_triplet) and not _is_stale(
+            faiss_triplet, rules_mtime
+        ):
             try:
                 kb = RuleKnowledgeBase.from_faiss_index(index_dir)
                 if kb.rules and any(rule.title for rule in kb.rules):
@@ -263,7 +269,9 @@ def load_knowledge_base(
                     return kb, metadata
             except Exception:
                 pass
-        if tfidf_available and faiss_json_path.exists():
+        if tfidf_available and faiss_json_path.exists() and not _is_stale(
+            (faiss_json_path,), rules_mtime
+        ):
             try:
                 kb = RuleKnowledgeBase.from_index(index_dir)
                 if kb.rules and any(rule.title for rule in kb.rules):
@@ -303,10 +311,20 @@ def load_knowledge_base(
     # 退到 JSON TF-IDF 重建
     if tfidf_available:
         if kb.index is not None:
-            kb.index.save(index_dir)
+            try:
+                kb.index.save(index_dir)
+                metadata["index_source"] = "rebuilt"
+                metadata["index_backend"] = "tfidf_json"
+            except OSError as exc:
+                metadata["index_source"] = "memory"
+                metadata["index_backend"] = "tfidf_memory"
+                metadata.setdefault("warnings", []).append(
+                    f"TF-IDF JSON 索引无法写入，使用内存索引：{exc}"
+                )
+        else:
+            metadata["index_source"] = "memory"
+            metadata["index_backend"] = "tfidf_memory"
         metadata["rules_loaded"] = len(kb.rules)
-        metadata["index_source"] = "rebuilt"
-        metadata["index_backend"] = "tfidf_json"
         metadata["rules_hash"] = _hash_rules_text(rules_path)
         return kb, metadata
 
@@ -337,6 +355,12 @@ def _hash_rules_text(path: Path) -> str:
     if not path.exists():
         return ""
     return hashlib.sha256(path.read_text(encoding="utf-8", errors="ignore").encode("utf-8")).hexdigest()
+
+
+def _is_stale(paths: tuple[Path, ...], rules_mtime: float) -> bool:
+    if rules_mtime <= 0:
+        return False
+    return any((not path.exists()) or path.stat().st_mtime < rules_mtime for path in paths)
 
 
 def _parse_rule_chunks(path: Path) -> list[RuleItem]:

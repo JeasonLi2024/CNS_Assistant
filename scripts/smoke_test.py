@@ -1,4 +1,59 @@
-"""Smoke tests for the standard document assistant project skeleton."""
+"""标准文档助手项目骨架的冒烟测试脚本。
+
+作用
+----
+不依赖 pytest，单独可跑。验证主 Agent 的最小可用骨架没有被人改坏：
+
+1. **项目目录结构** —— 调用 `managed_project_shape()`，断言返回的每个目录
+   路径在磁盘上真实存在。
+2. **主工具注册表** —— 断言 `STANDARD_DOCUMENT_TOOLS` 恰好只包含
+   `validate_output_schema` 和 `propose_memory_update` 两个工具。
+3. **subagent 列表** —— 断言 `build_subagents()` 返回的 subagent 名称集合中
+   **不包含** `vision_parser`。
+4. **元数据抽取端到端** —— 走一次
+   `save_uploaded_file` → `extract_standard_metadata` → `validate_output_schema`
+   的完整链路，断言：
+   - 上传成功；
+   - 元数据 `status == "ok"`，且 `aggregated_summary["标准号"] == "GB/T 9999-2026"`；
+   - 返回字段 `download.host_path` / `virtual_output_path` /
+     `virtual_manifest_path` 均非空。
+
+运行方式
+-------
+在项目根目录 `d:\\deep-agents\\` 下执行：
+
+```powershell
+# 直接跑（不需要 pytest）
+python scripts/smoke_test.py
+
+# 走 pytest 自动发现（tests/test_smoke_tools.py 已经做了 1 行薄包装）
+pytest tests/test_smoke_tools.py -v
+```
+
+环境与副作用
+------------
+- 默认会 monkey-patch `standard_document_assistant.graphs.metadata_extraction.nodes`
+  里的 `_traced_run_extraction` 和 `save_langextract_outputs`，用 mock 结果替代
+  真实 langextract 调用；因此**无需 `DASHSCOPE_API_KEY`** 也能跑通。
+  当环境里已设置 `DASHSCOPE_API_KEY` 时，自动跳过 patch，走真实模型。
+- 自动设置 `LANGSMITH_TRACING=false` / `LANGCHAIN_TRACING_V2=false`，
+  避免误触外网。
+- 会向 `uploads/smoke_standard.md` 写入一个临时样本（运行后可删除）。
+
+输出
+----
+成功时打印一段 JSON：
+```json
+{
+  "status": "ok",
+  "sample": "<virtual_path>",
+  "metadata": "<virtual_output_path>",
+  "manifest": "<virtual_manifest_path>",
+  "output_dir": "<OUTPUT_DIR>"
+}
+```
+失败时抛 `AssertionError`，并在消息中指出具体哪一条断言没通过。
+"""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@ name: standard-extraction
 description: |
   Use ONLY for 国标 Markdown 元数据抽取：输入必须为 Markdown 虚拟路径
   （/workspace/output/mineru/**/*.md 或 /workspace/input/uploads/**/*.md），
-  通过 extract_standard_metadata 工具（内部 langextract + 子图）抽取 16 类字段
+  通过 extract_standard_metadata 工具（内部 langextract + 子图）抽取 19 个标准元数据字段
   （ICS/CCS/标准号/标准层级/提出/归口/起草/引用/术语 等），并落盘 JSON / annotated /
   normalized / manifest。强约束：不要 read_file 预读全文；不要 edit_file 改写
   元数据 JSON；PDF/Word 必须先委派 parser 调用 parse_file_with_mineru。返回值
