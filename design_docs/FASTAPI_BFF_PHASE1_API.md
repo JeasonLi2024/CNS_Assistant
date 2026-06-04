@@ -1,14 +1,14 @@
 # FastAPI BFF Phase 1 本地接口文档
 
 > 适用范围：本地测试环境。  
-> 目标：用 FastAPI + uvicorn 作为 BFF 代理，调用本地 LangGraph Server 托管的 Deep Agents 图，实现标准文档上传、审核流式运行、HITL 恢复和产物下载。
+> 目标：用 FastAPI + uvicorn 作为 BFF 代理，调用本地 LangGraph Server 托管的 Deep Agents 图，实现文件上传、标准审核、SSE 透传、HITL resume 和产物下载。
 
 ---
 
 ## 1. 本地架构
 
 ```text
-前端 / curl / PowerShell
+前端 / 生成标准工作流 / curl / PowerShell
   |
   | HTTP + SSE
   v
@@ -25,15 +25,16 @@ LangGraph Server
     - standard_review
 ```
 
-Phase 1 中 FastAPI 不直接初始化主智能体，只通过 `langgraph-sdk` 调用 LangGraph Server。
+Phase 1 中 FastAPI 不直接初始化智能体，只通过 `langgraph-sdk` 调用 LangGraph Server。
+
+- 交互式审核入口调用 `agent` 图，适合前端/Studio 风格的人机协作。
+- 结构化审核入口直接调用 `standard_review` 图，适合另一个生成智能体循环调用。
 
 ---
 
 ## 2. 启动服务
 
 ### 2.1 安装依赖
-
-在项目根目录执行：
 
 ```powershell
 pip install -e ".[dev,documents,mineru,review]"
@@ -47,6 +48,8 @@ pip install -e .
 
 ### 2.2 设置本地环境变量
 
+交互式审批测试：
+
 ```powershell
 $env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
 $env:STANDARD_DOC_ARTIFACT_API_BASE = "http://127.0.0.1:8080"
@@ -54,30 +57,34 @@ $env:STANDARD_DOC_ENABLE_HITL = "1"
 $env:STANDARD_DOC_ENABLE_WORKSPACE_BACKEND = "1"
 ```
 
+生成标准工作流自动循环测试：
+
+```powershell
+$env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
+$env:STANDARD_DOC_ARTIFACT_API_BASE = "http://127.0.0.1:8080"
+$env:STANDARD_DOC_DISABLE_HITL = "1"
+$env:STANDARD_DOC_ENABLE_WORKSPACE_BACKEND = "1"
+```
+
 说明：
 
 - `LANGGRAPH_API_URL`：FastAPI 调用的上游 LangGraph Server 地址。
 - `STANDARD_DOC_ARTIFACT_API_BASE`：产物下载 URL 的 API 前缀。
-- `STANDARD_DOC_ENABLE_HITL=1`：本地验证审批流时启用 HITL。
+- `STANDARD_DOC_ENABLE_HITL=1`：仅建议用于本地验证审批流。
+- `STANDARD_DOC_DISABLE_HITL=1`：建议用于生成工作流自动循环，避免 run 暂停等待人工审批。
 - `STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1`：本地测试时允许 Deep Agents 内置文件工具访问 `/workspace/`。
 
 ### 2.3 启动 LangGraph Server
 
-打开第一个终端，在项目根目录执行：
+第一个终端：
 
 ```powershell
 langgraph dev --host 127.0.0.1 --port 2024 --no-browser
 ```
 
-启动后可访问：
-
-- API: `http://127.0.0.1:2024`
-- Docs: `http://127.0.0.1:2024/docs`
-- Studio: 根据终端输出打开 Studio URL
-
 ### 2.4 启动 FastAPI BFF
 
-打开第二个终端，在项目根目录执行：
+第二个终端：
 
 ```powershell
 uvicorn standard_document_assistant.api.app:app --host 0.0.0.0 --port 8080 --reload
@@ -90,56 +97,292 @@ uvicorn standard_document_assistant.api.app:app --host 0.0.0.0 --port 8080 --rel
 
 ---
 
-## 3. 标准文档审核操作流程
+## 3. 文件传递规则
 
-### 步骤 1：创建 thread
+审核接口只接受 Deep Agents 虚拟路径，例如 `/workspace/input/uploads/local-review-001/draft.md`。
+
+两个项目处于不同工作目录时，不要把生成智能体本地磁盘路径直接传给审核服务。推荐流程是：
+
+1. 生成智能体把草稿文件通过 `POST /api/threads/{thread_id}/uploads` 上传到 FastAPI。
+2. FastAPI 返回 `virtual_path`。
+3. 生成智能体把该 `virtual_path` 作为后续审核接口的 `file_path`。
+
+如果两个项目在同一台机器并共享同一个 `/workspace/` 映射，也可以直接传共享虚拟路径；但本地联调默认推荐上传，避免路径根目录不一致。
+
+---
+
+## 4. 上传文件
+
+创建 thread：
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://127.0.0.1:8080/api/threads" `
   -ContentType "application/json" `
-  -Body '{"thread_id":"local-review-001"}'
+  -Body '{"thread_id":"draft-loop-001"}'
 ```
 
-返回示例：
-
-```json
-{
-  "thread_id": "local-review-001",
-  "created_at": "..."
-}
-```
-
-### 步骤 2：上传标准文档
-
-PDF、DOCX、Markdown 均可通过 FastAPI 保存到 `/workspace/input/uploads/{thread_id}/`。
+上传草稿：
 
 ```powershell
 curl.exe -X POST `
-  "http://127.0.0.1:8080/api/threads/local-review-001/uploads" `
-  -F "file=@D:\path\to\standard.pdf"
+  "http://127.0.0.1:8080/api/threads/draft-loop-001/uploads" `
+  -F "file=@D:\path\to\draft.md"
 ```
 
 返回示例：
 
 ```json
 {
-  "original_filename": "standard.pdf",
-  "stored_filename": "standard.pdf",
-  "virtual_path": "/workspace/input/uploads/local-review-001/standard.pdf",
-  "suffix": ".pdf",
-  "size_bytes": 123456,
+  "original_filename": "draft.md",
+  "stored_filename": "draft.md",
+  "virtual_path": "/workspace/input/uploads/draft-loop-001/draft.md",
+  "suffix": ".md",
+  "size_bytes": 12345,
   "sha256": "...",
-  "content_type": "application/pdf"
+  "content_type": "text/markdown"
 }
 ```
 
-后续审核使用 `virtual_path`，不要使用 Windows 盘符路径。
+后续审核使用 `virtual_path`。
 
-### 步骤 3：发起标准文档审核
+---
 
-使用专用审核入口：
+## 5. 结构化非流式审核接口
+
+### 5.1 适用情形
+
+`POST /api/review-jobs/standard-review` 直接调用上游 `standard_review` 图，返回最终审核结果。它适合“生成标准文档”工作流做自动循环：
+
+```text
+生成草稿 -> 上传草稿 -> 结构化审核 -> 读取报告/结果 -> 修改草稿 -> 再审核 -> 通过后结束
+```
+
+该接口不依赖主 Agent 对自然语言的参数推断，因此适合精确控制“部分审核”和“单轨审核”。
+
+### 5.2 请求体
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft.md",
+  "source_path": null,
+  "manifest_path": null,
+  "output_subdir": null,
+  "trace_id": null,
+  "instruction": null,
+  "review_options": {
+    "mode": "content_only",
+    "target_scopes": null,
+    "line_start": null,
+    "line_end": null,
+    "partial_mode": null,
+    "top_k": null,
+    "force_rebuild_index": null,
+    "disable_widen": false,
+    "max_review_rounds": null
+  },
+  "return_report_content": true,
+  "return_result_json": true
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `thread_id` | 可选。用于产物登记和 LangGraph thread；不传则自动生成。 |
+| `file_path` | 必填。待审核文件虚拟路径。内容审核时通常是 Markdown；格式审核时可为 PDF/DOCX。 |
+| `source_path` | 可选。格式审核原始文件路径。`content_and_format` 时建议提供 PDF/DOCX。 |
+| `manifest_path` | 可选。已有 manifest 路径。 |
+| `output_subdir` | 可选。审核产物输出子目录。 |
+| `review_options` | 必填但有默认值。控制全文/部分/格式/内容审核。 |
+| `return_report_content` | 是否直接返回报告 Markdown 内容，默认 `true`。 |
+| `return_result_json` | 是否直接返回结果 JSON，默认 `true`。 |
+
+### 5.3 review_options
+
+| 参数 | 说明 |
+| --- | --- |
+| `mode="content_only"` | 默认。仅内容审核，按章节分轨，不做格式轨。 |
+| `mode="content_and_format"` | 内容审核 + 格式审核。建议 `file_path` 传 Markdown，`source_path` 传原始 PDF/DOCX。 |
+| `mode="format_only"` | 仅格式审核，不做内容规则判断。 |
+| `mode="scoped_content"` | 部分章节内容审核。必须传 `target_scopes`。 |
+| `mode="line_range_content"` | Markdown 指定行范围内容审核。必须传 `line_start` 或 `line_end`。 |
+| `mode="full_document_content"` | 全文内容审核。 |
+| `target_scopes` | 标准章节 canonical key，如 `["scope","normative_references"]`。 |
+| `line_start` / `line_end` | 1-based 行号。用于只审核 Markdown 某段。 |
+| `disable_widen` | 严格部分审核时设为 `true`，避免质量门控扩大到全文。 |
+| `max_review_rounds` | 覆盖审核回环次数。`0` 等价于禁止扩大审核。 |
+| `top_k` | 覆盖规则检索数量。 |
+| `force_rebuild_index` | 是否强制重建规则索引。 |
+
+常用章节 key：
+
+| 中文说法 | `target_scopes` |
+| --- | --- |
+| 范围 | `scope` |
+| 规范性引用文件 | `normative_references` |
+| 术语和定义 | `terms_definitions` |
+| 符号和缩略语 | `symbols_abbreviations` |
+| 其他正文 | `other_body` |
+| 附录 | `appendix` |
+| 参考文献 | `references` |
+
+### 5.4 示例：仅审核“范围”和“规范性引用文件”
+
+```powershell
+curl.exe -X POST `
+  "http://127.0.0.1:8080/api/review-jobs/standard-review" `
+  -H "Content-Type: application/json" `
+  -d "{\"thread_id\":\"draft-loop-001\",\"file_path\":\"/workspace/input/uploads/draft-loop-001/draft.md\",\"review_options\":{\"mode\":\"scoped_content\",\"target_scopes\":[\"scope\",\"normative_references\"],\"disable_widen\":true},\"return_report_content\":true,\"return_result_json\":true}"
+```
+
+### 5.5 示例：全文内容审核
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft.md",
+  "review_options": {
+    "mode": "full_document_content"
+  }
+}
+```
+
+### 5.6 示例：内容 + 格式审核
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft.md",
+  "source_path": "/workspace/input/uploads/draft-loop-001/draft.docx",
+  "review_options": {
+    "mode": "content_and_format"
+  }
+}
+```
+
+### 5.7 示例：仅格式审核
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft.docx",
+  "review_options": {
+    "mode": "format_only"
+  }
+}
+```
+
+### 5.8 示例：按行范围审核
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft.md",
+  "review_options": {
+    "mode": "line_range_content",
+    "line_start": 20,
+    "line_end": 80,
+    "disable_widen": true
+  }
+}
+```
+
+### 5.9 返回体
+
+```json
+{
+  "status": "completed",
+  "thread_id": "draft-loop-001",
+  "passed": false,
+  "review": {
+    "status": "success",
+    "summary": {
+      "total": 8,
+      "passed": 6,
+      "failed": 2,
+      "warnings": 0,
+      "errors": 0
+    },
+    "report_path": "/workspace/output/reviews/.../audit_report.md",
+    "result_path": "/workspace/output/reviews/.../review_result.json"
+  },
+  "review_report_markdown": "## 标准文档审核报告\n...",
+  "review_result": {
+    "issues": []
+  },
+  "artifacts": {
+    "review_report": {
+      "artifact_id": "...",
+      "download_url": "http://127.0.0.1:8080/api/threads/draft-loop-001/artifacts/.../download"
+    },
+    "review_result": {
+      "artifact_id": "...",
+      "download_url": "http://127.0.0.1:8080/api/threads/draft-loop-001/artifacts/.../download"
+    }
+  },
+  "review_options": {
+    "mode": "scoped_content",
+    "target_scopes": ["scope", "normative_references"],
+    "disable_widen": true
+  }
+}
+```
+
+生成智能体建议优先读取：
+
+- `passed`：程序化通过/不通过判断。
+- `review_report_markdown`：给模型作为修改依据。
+- `review_result`：结构化定位问题、严重级别和规则依据。
+- `artifacts.*.download_url`：需要归档或人工查看时下载报告文件。
+
+---
+
+## 6. 结构化流式审核接口
+
+`POST /api/review-jobs/standard-review/stream` 与非流式接口使用同一个请求体，也支持完整 `review_options`。
+
+适用情形：
+
+- 前端需要展示审核进度。
+- 生成工作流希望边审边记录 trace，但仍在 `review.completed` 事件中读取最终结果。
+
+示例：
+
+```powershell
+curl.exe -N -X POST `
+  "http://127.0.0.1:8080/api/review-jobs/standard-review/stream" `
+  -H "Content-Type: application/json" `
+  -d "{\"thread_id\":\"draft-loop-001\",\"file_path\":\"/workspace/input/uploads/draft-loop-001/draft.md\",\"review_options\":{\"mode\":\"scoped_content\",\"target_scopes\":[\"scope\",\"normative_references\"],\"disable_widen\":true}}"
+```
+
+常见 SSE 事件：
+
+```text
+event: run.started
+data: {"thread_id":"draft-loop-001","assistant_id":"standard_review"}
+
+event: agent.progress
+data: {"type":"review.retrieve.rules","active_scopes":["scope","normative_references"]}
+
+event: review.snapshot
+data: {"job_id":"...","trace_id":"..."}
+
+event: review.completed
+data: {"status":"completed","passed":false,"review_report_markdown":"...","review_result":{...}}
+
+event: run.completed
+data: {"thread_id":"draft-loop-001"}
+```
+
+---
+
+## 7. 交互式主 Agent 审核接口
+
+`POST /api/threads/{thread_id}/standard-review/stream` 调用上游 `agent` 图。它会把 `file_path` 和 `instruction` 组织成自然语言消息交给主 Agent，适合交互式审核。
 
 ```powershell
 curl.exe -N -X POST `
@@ -148,40 +391,22 @@ curl.exe -N -X POST `
   -d "{\"file_path\":\"/workspace/input/uploads/local-review-001/standard.pdf\"}"
 ```
 
-该接口返回 `text/event-stream`。常见事件：
+该入口可以处理用户自然语言，例如：
 
-```text
-event: run.started
-data: {"run_id":"run_xxx","thread_id":"local-review-001","assistant_id":"agent"}
-
-event: agent.progress
-data: {"type":"mineru.parse.completed", "...":"..."}
-
-event: plan.updated
-data: {"todos":[...]}
-
-event: approval.required
-data: {"interrupt":[...]}
-
-event: artifact.created
-data: {"artifact_id":"...","download_url":"http://127.0.0.1:8080/api/threads/.../download"}
-
-event: run.completed
-data: {"artifact_ids":["..."]}
+```json
+{
+  "file_path": "/workspace/input/uploads/t/draft.md",
+  "instruction": "请仅审核范围和规范性引用文件部分。"
+}
 ```
 
-如果上传的是 Markdown，也可直接发起审核：
+但它依赖主 Agent / reviewer 对自然语言的理解，不建议作为另一个智能体的稳定机器接口。若需要严格触发 `target_scopes=["scope","normative_references"]`，应使用结构化审核接口。
 
-```powershell
-curl.exe -N -X POST `
-  "http://127.0.0.1:8080/api/threads/local-review-001/standard-review/stream" `
-  -H "Content-Type: application/json" `
-  -d "{\"file_path\":\"/workspace/input/uploads/local-review-001/standard.md\",\"instruction\":\"请重点检查元数据和格式来源问题。\"}"
-```
+---
 
-### 步骤 4：处理 HITL 审批
+## 8. HITL resume
 
-如果 SSE 中出现 `approval.required`，说明上游图暂停等待人工决策。批准继续：
+如果交互式 SSE 中出现 `approval.required`，说明上游图暂停等待人工决策。批准继续：
 
 ```powershell
 Invoke-RestMethod `
@@ -211,87 +436,105 @@ Invoke-RestMethod `
   -Body '{"action":"reject","message":"本次不允许调用该工具。"}'
 ```
 
-### 步骤 5：查看产物列表
+---
+
+## 9. 产物查询与下载
+
+查看产物列表：
 
 ```powershell
 Invoke-RestMethod `
   -Method Get `
-  -Uri "http://127.0.0.1:8080/api/threads/local-review-001/artifacts"
+  -Uri "http://127.0.0.1:8080/api/threads/draft-loop-001/artifacts"
 ```
 
-返回示例：
-
-```json
-{
-  "thread_id": "local-review-001",
-  "artifacts": [
-    {
-      "artifact_id": "abc123",
-      "tool": "run_standard_review",
-      "artifact_type": "review_report",
-      "virtual_path": "/workspace/output/reviews/.../audit_report.md",
-      "download_url": "http://127.0.0.1:8080/api/threads/local-review-001/artifacts/abc123/download"
-    }
-  ]
-}
-```
-
-### 步骤 6：下载产物
+下载产物：
 
 ```powershell
 curl.exe -L `
-  "http://127.0.0.1:8080/api/threads/local-review-001/artifacts/abc123/download" `
+  "http://127.0.0.1:8080/api/threads/draft-loop-001/artifacts/{artifact_id}/download" `
   -o ".\audit_report.md"
 ```
 
+结构化审核接口默认已经直接返回报告内容和结果 JSON；下载接口主要用于归档、前端预览或人工复核。
+
 ---
 
-## 4. 通用运行接口
+## 10. 生成标准工作流循环调用建议
 
-如果不使用专用标准审核入口，也可以直接调用主 Agent。
+推荐另一个生成智能体按以下方式接入：
 
-```powershell
-curl.exe -N -X POST `
-  "http://127.0.0.1:8080/api/threads/local-review-001/runs/stream" `
-  -H "Content-Type: application/json" `
-  -d "{\"message\":\"请审核 /workspace/input/uploads/local-review-001/standard.pdf，并输出报告。\"}"
-```
+1. 生成或修改草稿 Markdown。
+2. 上传草稿，保存返回的 `virtual_path`。
+3. 调用 `POST /api/review-jobs/standard-review`。
+4. 模型读取 `review_report_markdown` 和 `review_result`，判断是否需要修改。
+5. 如果 `passed=false` 或模型判断需修订，生成新版本草稿并重复 2-4。
+6. 如果 `passed=true` 且模型确认审核意见已闭环，结束生成流程。
 
-也可以传原始 LangGraph input：
+推荐请求：
 
 ```json
 {
-  "input": {
-    "messages": [
-      {
-        "role": "user",
-        "content": "请审核 /workspace/input/uploads/local-review-001/standard.pdf"
-      }
-    ]
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft-v3.md",
+  "review_options": {
+    "mode": "content_only",
+    "disable_widen": false
   },
-  "stream_modes": ["custom", "updates"],
-  "stream_subgraphs": true
+  "return_report_content": true,
+  "return_result_json": true
+}
+```
+
+如果生成工作流只改了“范围”和“规范性引用文件”，为了降低成本并避免无关章节干扰，可使用：
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft-v3.md",
+  "review_options": {
+    "mode": "scoped_content",
+    "target_scopes": ["scope", "normative_references"],
+    "disable_widen": true
+  },
+  "return_report_content": true,
+  "return_result_json": true
+}
+```
+
+如果需要最终定稿前的兜底检查，建议最后再跑一次：
+
+```json
+{
+  "thread_id": "draft-loop-001",
+  "file_path": "/workspace/input/uploads/draft-loop-001/draft-final.md",
+  "source_path": "/workspace/input/uploads/draft-loop-001/draft-final.docx",
+  "review_options": {
+    "mode": "content_and_format"
+  }
 }
 ```
 
 ---
 
-## 5. 接口清单
+## 11. 接口清单
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/health` | FastAPI BFF 健康检查 |
 | `POST` | `/api/threads` | 创建 LangGraph thread |
 | `POST` | `/api/threads/{thread_id}/uploads` | 上传文件并返回 `/workspace/` 虚拟路径 |
+| `POST` | `/api/review-jobs/standard-review` | 结构化非流式标准审核，适合生成工作流 |
+| `POST` | `/api/review-jobs/standard-review/stream` | 结构化流式标准审核，支持 `review_options` |
 | `POST` | `/api/threads/{thread_id}/runs/stream` | 通用主 Agent 流式运行 |
-| `POST` | `/api/threads/{thread_id}/standard-review/stream` | 标准文档审核专用流式入口 |
+| `POST` | `/api/threads/{thread_id}/standard-review/stream` | 交互式标准审核入口，走主 Agent 自然语言理解 |
 | `POST` | `/api/threads/{thread_id}/runs/resume` | HITL 审批恢复 |
 | `GET` | `/api/threads/{thread_id}/artifacts` | 查看 thread 产物列表 |
 | `GET` | `/api/threads/{thread_id}/artifacts/{artifact_id}/download` | 下载产物 |
 
 ---
 
-## 6. 本地排错
+## 12. 本地排错
 
 ### FastAPI 返回 `run.failed`
 
@@ -302,6 +545,7 @@ curl.exe -N -X POST `
 3. `.env` 是否配置模型 API key。
 4. PDF/DOCX 审核时 MinerU 本地服务或云端配置是否可用。
 5. 文件路径是否是 `/workspace/...` 虚拟路径。
+6. 自动循环场景是否启用了 `STANDARD_DOC_DISABLE_HITL=1`。
 
 ### 上传成功但审核读不到文件
 
@@ -311,7 +555,25 @@ curl.exe -N -X POST `
 $env:STANDARD_DOC_ENABLE_WORKSPACE_BACKEND = "1"
 ```
 
-并确认传给审核接口的是上传返回的 `virtual_path`，不是 `host_path`。
+并确认传给审核接口的是上传返回的 `virtual_path`，不是 Windows 盘符路径。
+
+### 部分审核被扩大到全文
+
+标准审核子图的质量门控在依据不足时可能扩大审核范围。严格部分审核时，在 `review_options` 中设置：
+
+```json
+{
+  "disable_widen": true
+}
+```
+
+或：
+
+```json
+{
+  "max_review_rounds": 0
+}
+```
 
 ### 产物没有 `download_url`
 
@@ -323,7 +585,7 @@ $env:STANDARD_DOC_ARTIFACT_API_BASE = "http://127.0.0.1:8080"
 
 ---
 
-## 7. Phase 1 边界
+## 13. Phase 1 边界
 
 本阶段只覆盖本地联调：
 

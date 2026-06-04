@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -13,6 +14,7 @@ from langgraph_sdk.schema import Command
 from standard_document_assistant.api.langgraph_client import get_langgraph_client
 from standard_document_assistant.api.models import (
     CreateThreadRequest,
+    DirectStandardReviewRequest,
     ResumeRunRequest,
     RunStreamRequest,
     StandardReviewRequest,
@@ -22,10 +24,13 @@ from standard_document_assistant.api.sse_adapter import map_langgraph_part
 from standard_document_assistant.artifacts import (
     list_thread_artifacts,
     public_artifact_record,
+    register_from_tool_result,
     resolve_thread_artifact_path,
 )
 from standard_document_assistant.pathing import utc_now_iso
 from standard_document_assistant.streaming import sse_encode
+from standard_document_assistant.tools.review import _build_initial_state, _public_result
+from standard_document_assistant.tracing import STANDARD_REVIEW_TOOL_NAME
 from standard_document_assistant.uploads import save_uploaded_file
 
 
@@ -63,6 +68,151 @@ def _review_message(payload: StandardReviewRequest) -> str:
         "请返回关键发现、风险等级、审核报告和可下载产物路径。"
         f"{extra}"
     )
+
+
+def _build_direct_review_state(payload: DirectStandardReviewRequest) -> dict[str, Any]:
+    options = payload.review_options
+    mode = options.mode
+    content_path: str | None = None
+    source_path: str | None = None
+    format_only = False
+    partial_mode = options.partial_mode
+    target_scopes = options.target_scopes
+    line_start = options.line_start
+    line_end = options.line_end
+
+    if mode == "format_only":
+        source_path = payload.source_path or payload.file_path
+        format_only = True
+        partial_mode = partial_mode or "format_only"
+        target_scopes = target_scopes or ["format"]
+    else:
+        content_path = payload.file_path
+        if mode == "content_and_format":
+            source_path = payload.source_path
+        if mode == "full_document_content":
+            partial_mode = "full_document"
+        elif mode == "scoped_content":
+            partial_mode = partial_mode or "sectional"
+            if not target_scopes:
+                raise HTTPException(status_code=400, detail="scoped_content 需要提供 target_scopes。")
+        elif mode == "line_range_content":
+            partial_mode = partial_mode or "sectional"
+            if line_start is None and line_end is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="line_range_content 需要提供 line_start 或 line_end。",
+                )
+        else:
+            partial_mode = partial_mode or "sectional"
+
+    state = _build_initial_state(
+        content_path=content_path,
+        source_path=source_path,
+        manifest_path=payload.manifest_path,
+        target_scopes=target_scopes,
+        line_start=line_start,
+        line_end=line_end,
+        top_k=options.top_k,
+        format_only=format_only,
+        output_subdir=payload.output_subdir,
+        trace_id=payload.trace_id,
+        force_rebuild_index=options.force_rebuild_index,
+        partial_mode=partial_mode,
+    )
+    if options.disable_widen:
+        state["max_review_rounds"] = 0
+    elif options.max_review_rounds is not None:
+        state["max_review_rounds"] = options.max_review_rounds
+    state["api_review_options"] = options.model_dump()
+    if payload.instruction:
+        state["api_instruction"] = payload.instruction
+    return state
+
+
+def _safe_load_virtual_file(virtual_path: str) -> str:
+    if not virtual_path:
+        return ""
+    from standard_document_assistant.pathing import virtual_to_host_path
+
+    host = virtual_to_host_path(virtual_path)
+    if not host.exists() or not host.is_file():
+        return ""
+    return host.read_text(encoding="utf-8", errors="ignore")
+
+
+def _safe_load_virtual_json(virtual_path: str) -> dict[str, Any]:
+    if not virtual_path:
+        return {}
+    import json
+
+    text = _safe_load_virtual_file(virtual_path)
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _passed_from_public_result(public: dict[str, Any], result_json: dict[str, Any]) -> bool:
+    if public.get("status") != "success":
+        return False
+    summary = public.get("summary") or {}
+    failed = int(summary.get("failed") or 0)
+    errors = int(summary.get("errors") or 0)
+    critical = int((summary.get("by_severity") or {}).get("critical") or 0)
+    if failed or errors or critical:
+        return False
+    issues = result_json.get("issues") or []
+    if isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            if issue.get("status") == "fail":
+                return False
+            if issue.get("severity") == "critical":
+                return False
+    return True
+
+
+def _artifact_map(records: list[Any]) -> dict[str, dict[str, Any]]:
+    mapped: dict[str, dict[str, Any]] = {}
+    for record in records:
+        mapped[record.artifact_type] = public_artifact_record(record)
+    return mapped
+
+
+def _direct_review_response(
+    *,
+    thread_id: str,
+    payload: DirectStandardReviewRequest,
+    state_result: dict[str, Any],
+) -> dict[str, Any]:
+    public = _public_result(state_result)
+    records = []
+    if public.get("status") == "success":
+        records = register_from_tool_result(
+            thread_id=thread_id,
+            tool_name=STANDARD_REVIEW_TOOL_NAME,
+            tool_result=public,
+        )
+    artifacts = public.get("artifacts") or {}
+    report_path = str(artifacts.get("report") or "")
+    result_path = str(artifacts.get("result") or "")
+    report_markdown = _safe_load_virtual_file(report_path) if payload.return_report_content else ""
+    result_json = _safe_load_virtual_json(result_path) if payload.return_result_json else {}
+    return {
+        "status": "completed" if public.get("status") == "success" else "failed",
+        "thread_id": thread_id,
+        "passed": _passed_from_public_result(public, result_json),
+        "review": public,
+        "review_report_markdown": report_markdown,
+        "review_result": result_json,
+        "artifacts": _artifact_map(records),
+        "review_options": payload.review_options.model_dump(),
+    }
 
 
 @app.get("/health")
@@ -146,6 +296,117 @@ async def stream_standard_review(
         ),
         media_type="text/event-stream",
     )
+
+
+@app.post("/api/review-jobs/standard-review")
+async def direct_standard_review(payload: DirectStandardReviewRequest) -> dict[str, Any]:
+    """Run the standard_review graph directly for machine workflows."""
+
+    thread_id = payload.thread_id or f"review-{uuid.uuid4().hex[:12]}"
+    state = _build_direct_review_state(payload)
+    client = get_langgraph_client()
+    try:
+        result = await client.runs.wait(
+            thread_id,
+            "standard_review",
+            input=state,
+            raise_error=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"标准审核执行失败：{exc}") from exc
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="标准审核返回值不是对象。")
+    return _direct_review_response(thread_id=thread_id, payload=payload, state_result=result)
+
+
+@app.post("/api/review-jobs/standard-review/stream")
+async def direct_standard_review_stream(payload: DirectStandardReviewRequest) -> StreamingResponse:
+    """Run the standard_review graph directly and stream graph events."""
+
+    thread_id = payload.thread_id or f"review-{uuid.uuid4().hex[:12]}"
+    state = _build_direct_review_state(payload)
+    return StreamingResponse(
+        _stream_direct_review_events(thread_id=thread_id, payload=payload, state=state),
+        media_type="text/event-stream",
+    )
+
+
+async def _stream_direct_review_events(
+    *,
+    thread_id: str,
+    payload: DirectStandardReviewRequest,
+    state: dict[str, Any],
+) -> AsyncIterator[str]:
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    client = get_langgraph_client()
+    latest_state: dict[str, Any] = {}
+    yield sse_encode(
+        "run.started",
+        {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "assistant_id": "standard_review",
+            "review_options": payload.review_options.model_dump(),
+        },
+    )
+    try:
+        async for part in client.runs.stream(
+            thread_id,
+            "standard_review",
+            input=state,
+            stream_mode=["custom", "updates", "values"],
+            stream_subgraphs=True,
+        ):
+            event = getattr(part, "event", None)
+            data = getattr(part, "data", None)
+            if isinstance(part, dict):
+                event = part.get("event")
+                data = part.get("data")
+            if event == "custom":
+                custom = dict(data) if isinstance(data, dict) else {"data": data}
+                custom.update({"run_id": run_id, "thread_id": thread_id})
+                yield sse_encode("agent.progress", custom)
+            elif event == "values" and isinstance(data, dict):
+                latest_state = data
+                yield sse_encode(
+                    "review.snapshot",
+                    {
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "status": data.get("status", ""),
+                        "job_id": data.get("job_id", ""),
+                    },
+                )
+            elif event == "updates":
+                yield sse_encode(
+                    "review.update",
+                    {"run_id": run_id, "thread_id": thread_id, "data": data},
+                )
+        response = _direct_review_response(
+            thread_id=thread_id,
+            payload=payload,
+            state_result=latest_state or state,
+        )
+        yield sse_encode("review.completed", response)
+        yield sse_encode(
+            "run.completed",
+            {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "passed": response["passed"],
+                "artifact_types": list(response["artifacts"].keys()),
+            },
+        )
+    except Exception as exc:
+        yield sse_encode(
+            "run.failed",
+            {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "error": str(exc),
+                "recoverable": True,
+            },
+        )
 
 
 async def _stream_run_events(

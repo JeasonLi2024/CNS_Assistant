@@ -4,7 +4,7 @@
 > 框架严格遵循 Deep Agents 规范（虚拟文件路径、HITL、子代理、Skills、Memory 提案、LangSmith Trace），并落地了 **"FAISS + LLM Judge 多策略 + 质量门控 + 范围扩大回环 + scope_summary + audit_summary"** 完整内容审核链路。
 > 当前 `langgraph.json` 同时注册了 3 个图：`agent`（主 Agent）、`metadata_extraction`（元数据抽取子图）、`standard_review`（标准审核子图），可在 LangGraph Studio 同时可视化。
 >
-> 开发建议：使用LangChain MCP和官方Skills，[GitHub - langchain-ai/langchain-skills · GitHub](https://github.com/langchain-ai/langchain-skills)，通过LangSmith可视化观测追踪
+> 开发建议：使用LangChain MCP和官方Skills——[GitHub - langchain-ai/langchain-skills · GitHub](https://github.com/langchain-ai/langchain-skills)；通过LangSmith可视化观测追踪。模式设计可以参考字节[Deer Flow](https://github.com/bytedance/deer-flow)。
 
 ---
 
@@ -28,13 +28,13 @@
 | **Skills on-demand** | 4 个技能包：`standard-parsing` / `standard-extraction` / `standard-review` / `standard-drafting`，按需加载 |
 | **HITL** | 9 个高敏工具走 `interrupt_on`（写入、解析、抽取、审核、索引、记忆、执行等） |
 | **虚拟文件** | 全部 IO 限定在 `/workspace/...`，`FilesystemPermission` 强制落点 |
-| **Memory** | 短期（State）+ 工作区（Filesystem）+ 长期（Store），记忆更新走提案制 |
+| **Memory（未做持久化）** | 短期（State）+ 工作区（Filesystem）+ 长期（Store），记忆更新走提案制 |
 | **Trace** | `invoke_traced_graph` 注入父级 callbacks；子图以独立 graph id 呈现 |
 | **子图** | `metadata_extraction`、`standard_review` 两个 LangGraph 子图（均带 `Command` 条件边），全部注册到 `langgraph.json` |
-| **Send 并行** | `judge_rules` 内 `asyncio.gather` + `Semaphore` 对 scope/rule 二维分组扇出 |
-| **Stream** | `state["trace_events"]` + `get_stream_writer` 双通道，命名空间统一 `<domain>.<stage>` |
+| **Send 并行（尚未实现）** | `judge_rules` 内 `asyncio.gather` + `Semaphore` 对 scope/rule 二维分组扇出 |
+| **Stream（仅实现统一结构）** | `state["trace_events"]` + `get_stream_writer` 双通道，命名空间统一 `<domain>.<stage>` |
 | **FastAPI BFF** | 本地 `uvicorn` 代理后端：上传、SSE 透传、HITL resume、产物下载 |
-| **多用户 runtime** | `_memory_namespace_factory` 按 LangGraph Server `server_info.user.identity` 隔离 |
+| **多用户 runtime（尚未实现）** | `_memory_namespace_factory` 按 LangGraph Server `server_info.user.identity` 隔离 |
 | **离线可跑** | FAISS 不可用时回退 TF-IDF JSON；LLM 无 key 时回退 `FakeListChatModel` |
 | **Studio 可视化** | `langgraph dev` 即可在 http://localhost:2024 看到主图 + 两个子图 |
 
@@ -138,9 +138,9 @@ d:\deep-agents\
 │   └── resources/review_rules/    # 规则源 + 自动构建的索引
 │       ├── rules_test.md          # 规则源（用户维护）
 │       ├── rules.faiss.json       # 纯 Python TF-IDF 回退索引
-│       ├── rules.faiss            # ★ FAISS 二进制索引（运行时构建）
-│       ├── rules.faiss.meta.json  # ★ FAISS 元数据
-│       └── tfidf_vectorizer.pkl   # ★ sklearn TfidfVectorizer
+│       ├── rules.faiss            # FAISS 二进制索引（运行时构建）
+│       ├── rules.faiss.meta.json  # FAISS 元数据
+│       └── tfidf_vectorizer.pkl   # sklearn TfidfVectorizer
 │
 ├── subagents/                     # 5 个子代理 AGENTS.md
 │   ├── parser/AGENTS.md
@@ -255,11 +255,11 @@ lxml                    # XML / OOXML 处理
 | 段 | 关键字段 | 含义 |
 |---|---|---|
 | `app` | `name`, `default_language=zh-CN` | Agent 名 / 默认中文回复 |
-| `models.primary` | `provider=qwen`, `class=langchain_qwq.ChatQwen`, `model=qwen3.7-max` | 主对话模型 |
+| `models.primary` | `provider=qwen`, `class=langchain_qwq.ChatQwen`, `model=qwen3.7-plus` | 主对话模型 |
 | `runtime` | `streaming=true`, `transport=sse`, `require_human_approval=true` | 流式 + 审批 |
 | `workspace` | `uploads_dir`, `output_dir`, `allowed_upload_suffixes` | 虚拟目录与允许后缀 |
 | `mineru` | `api_mode=local/precise`, `precise_poll_interval=3`, `request_options` | MinerU 解析 |
-| `metadata_extraction` | `default_scope_mode`, `scoped_text_max_bytes`, `model=qwen3.5-flash`, `batch_length=40`, `max_workers=20` | langextract 抽取 |
+| `metadata_extraction` | `default_scope_mode`, `scoped_text_max_bytes`, `model=qwen3.7-plus`, `batch_length=40`, `max_workers=20` | langextract 抽取 |
 | `standard_review` | `rules_md`, `index_dir`, `top_k=8`, `max_review_rounds=2`, 30+ 字段 | 标准审核（详见 §5.5） |
 | `memory` | `checkpointer=memory`, `store=inmemory`, `routes.{short_term,workspace,long_term}` | 记忆路由 |
 
@@ -269,7 +269,7 @@ lxml                    # XML / OOXML 处理
 |---|---|---|
 | `DASHSCOPE_API_KEY` | LLM Judge / Metadata 抽取 / Embedding | Qwen 兼容 OpenAI 模式 |
 | `DASHSCOPE_BASE_URL` | 覆盖 `https://dashscope.aliyuncs.com/compatible-mode/v1` | 可选 |
-| `DASHSCOPE_JUDGE_MODEL` | 覆盖 `standard_review.judge_model` | 默认 `qwen3.5-flash` |
+| `DASHSCOPE_JUDGE_MODEL` | 覆盖 `standard_review.judge_model` | 默认 `qwen3.7-plus` |
 | `DASHSCOPE_EMBEDDING_MODEL` | 覆盖 `standard_review.embedding_model` | 默认 `text-embedding-v3` |
 | `MINERU_API_MODE` | `local` / `precise` | 切 MinerU 客户端 |
 | `MINERU_API_BASE_URL` | local 模式服务地址 | `http://127.0.0.1:18001` |
@@ -329,7 +329,7 @@ START → ingest → retrieve_rules → judge_rules → quality_gate (Command[Li
                               widen_review_scope → reload_review_rules
                                                   └─────→ judge_rules (回环)
                                                                     │
-                                                              (ok) │
+                                                              (ok)  │
                                                                     ↓
                                                               format_review
                                                                     ↓
@@ -371,6 +371,32 @@ START → ingest → retrieve_rules → judge_rules → quality_gate (Command[Li
 |---|---|---|---|---|
 | **内容轨（content）** | MinerU Markdown | `enable_llm_review=true` | `LLMSoftRuleJudge` 4 策略 | `AuditIssue(status=fail/insufficient_context)` |
 | **格式轨（format_source）** | 源 PDF/DOCX | 提供 `source_path` | `format_audit.run_format_source_audit` | `ReviewIssue(audit_track=format_source)` |
+
+### 5.4.1 默认审核、部分审核与单轨审核
+
+`run_standard_review` 保留部分审核与单轨审核能力。默认行为不是一开始把全文作为单个块审核，而是：
+
+- **Markdown only**：执行内容轨，默认 `partial_mode="sectional"`，按 13 个 scope 切分后审核；没有 PDF/DOCX `source_path` 时格式轨跳过。
+- **Markdown + PDF/DOCX source_path**：执行内容轨 + 格式轨。
+- **质量门控扩大范围**：如果内容轨出现 `insufficient_context` 且 `review_round < max_review_rounds`，子图会自动进入 `full_document` 复审。
+- **仅格式审核**：设置 `format_only=true` 或 `partial_mode="format_only"`，或直接调用 `run_format_source_review(source_path=...)`。
+- **指定范围审核**：设置 `target_scopes`，例如 `["scope", "normative_references"]`。
+- **指定行区间审核**：设置 `line_start` / `line_end`，仅对 Markdown 对应行片段构建审核视图。
+
+常用 scope key 与中文别名：
+
+| 中文 | scope key |
+|---|---|
+| 范围 | `scope` |
+| 规范性引用文件 / 引用文件 | `normative_references` |
+| 术语和定义 | `terms_definitions` |
+| 前言 | `foreword` |
+| 引言 | `introduction` |
+| 目次 / 目录 | `toc` |
+| 附录 | `appendix` |
+| 参考文献 | `references` |
+
+在主 Agent 中可以用自然语言触发，例如“请仅审核 `/workspace/input/uploads/t/draft.md` 的范围和规范性引用文件部分”。系统具备 scope 别名映射，但该路径依赖主 Agent / reviewer 对自然语言的理解，**不适合作为另一个生成智能体的稳定机器接口**。生成工作流应使用 FastAPI 结构化接口传 `review_options.target_scopes=["scope","normative_references"]`，并在需要严格局部审核时设置 `disable_widen=true`，避免质量门控扩大到全文。
 
 ### 5.5 `standard_review` 段配置（30+ 字段）
 
@@ -487,7 +513,7 @@ python scripts/rebuild_rules_index.py --rules-md custom.md --index-dir custom/in
   "trace_id": "...",
   "rules_loaded": 3,
   "index_source": "rebuilt",
-  "index_backend": "faiss",            // ★ 新增
+  "index_backend": "faiss",            
   "warnings": []                        // 缺包/失败时附带原因
 }
 ```
@@ -803,6 +829,7 @@ agent = build_standard_document_agent(strict_model=True, langgraph_server=False)
 
 - 文件上传：保存到 `/workspace/input/uploads/{thread_id}/`，返回 Deep Agents 虚拟路径。
 - 标准审核流式入口：调用 LangGraph Server 上游 `agent`，以 SSE 返回 `run.started`、`agent.progress`、`approval.required`、`artifact.created`、`run.completed` 等事件。
+- 结构化标准审核入口：直接调用上游 `standard_review` 图，支持非流式返回审核报告内容和结果 JSON，适合“生成标准文档”工作流循环调用。
 - HITL 恢复：通过 `Command(resume={"decisions": [...]})` 恢复暂停的 run。
 - 产物列表与下载：按 thread 登记并下载审核报告、结果 JSON、trace、manifest 等产物。
 
@@ -822,6 +849,25 @@ POST /api/threads/{thread_id}/runs/resume        # 如 SSE 出现 approval.requi
 GET  /api/threads/{thread_id}/artifacts
 GET  /api/threads/{thread_id}/artifacts/{artifact_id}/download
 ```
+
+生成标准工作流应优先使用结构化非流式入口，避免依赖主 Agent 对自然语言的参数推断：
+
+```text
+POST /api/threads
+POST /api/threads/{thread_id}/uploads
+POST /api/review-jobs/standard-review
+```
+
+`POST /api/review-jobs/standard-review` 与 `POST /api/review-jobs/standard-review/stream` 均支持 `review_options`：
+
+- `mode="content_only"`：默认内容审核，按章节分轨。
+- `mode="content_and_format"`：内容审核 + 格式审核，需要同时提供原始 `source_path`。
+- `mode="format_only"`：仅格式审核，不进行内容规则判断。
+- `mode="scoped_content"`：仅审核指定章节，传 `target_scopes`，例如 `["scope","normative_references"]`。
+- `mode="line_range_content"`：仅审核 Markdown 指定行号范围，传 `line_start` / `line_end`。
+- `mode="full_document_content"`：全文内容审核。
+
+严格部分审核时建议传 `disable_widen=true`，否则标准审核子图的质量门控在依据不足时可能扩大到全文补充审核。非流式结构化入口会返回 `passed`、`review_report_markdown`、`review_result` 和产物下载信息，适合作为“生成 → 审核 → 修改 → 再审核”循环的判断输入。
 
 完整接口文档见：[design_docs/FASTAPI_BFF_PHASE1_API.md](file:///d:/deep-agents/design_docs/FASTAPI_BFF_PHASE1_API.md)。
 
@@ -945,7 +991,8 @@ notepad .env
 # FastAPI BFF 本地联调建议：
 # LANGGRAPH_API_URL=http://127.0.0.1:2024
 # STANDARD_DOC_ARTIFACT_API_BASE=http://127.0.0.1:8080
-# STANDARD_DOC_ENABLE_HITL=1
+# 交互式审批测试可设置 STANDARD_DOC_ENABLE_HITL=1
+# 生成工作流自动循环建议设置 STANDARD_DOC_DISABLE_HITL=1，且不要设置 STANDARD_DOC_ENABLE_HITL=1
 # STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1
 
 # 3. 构建审核规则索引（首次 / 改 rules_test.md 后）
@@ -974,9 +1021,12 @@ uvicorn standard_document_assistant.api.app:app --host 0.0.0.0 --port 8080 --rel
 >
 > 通过 FastAPI 接口执行标准文档审核的完整步骤见
 > [design_docs/FASTAPI_BFF_PHASE1_API.md](file:///d:/deep-agents/design_docs/FASTAPI_BFF_PHASE1_API.md)，核心流程是：
-> 创建 thread → 上传 PDF/DOCX/Markdown → 调用
+> 交互式审核：创建 thread → 上传 PDF/DOCX/Markdown →
 > `POST /api/threads/{thread_id}/standard-review/stream` → 如需审批则调用
 > `POST /api/threads/{thread_id}/runs/resume` → 查询并下载产物。
+> 生成工作流循环审核：上传生成稿 → 调用
+> `POST /api/review-jobs/standard-review` 并传 `review_options` → 根据返回的
+> `passed`、`review_report_markdown`、`review_result` 决定是否修改后再审。
 
 ---
 
