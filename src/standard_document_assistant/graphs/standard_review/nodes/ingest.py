@@ -28,6 +28,13 @@ from standard_document_assistant.review_core.scopes import build_scope_text_map,
 from standard_document_assistant.review_core.serialization import serialize_document
 
 
+def _max_review_rounds_from_state(state: StandardReviewState) -> int:
+    value = state.get("max_review_rounds")
+    if value is None:
+        return int(load_config().standard_review.max_review_rounds)
+    return int(value)
+
+
 def ingest(state: StandardReviewState, runtime: Any = None) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
@@ -79,9 +86,7 @@ def ingest(state: StandardReviewState, runtime: Any = None) -> dict[str, Any]:
             "active_scope_keys": [],
             "partial_mode": "format_only",
             "review_round": 0,
-            "max_review_rounds": int(
-                state.get("max_review_rounds") or load_config().standard_review.max_review_rounds
-            ),
+            "max_review_rounds": _max_review_rounds_from_state(state),
             "errors": errors,
             "warnings": warnings,
             "trace_events": trace + [emit_event(state, "ingest", "format_only")],
@@ -161,9 +166,7 @@ def ingest(state: StandardReviewState, runtime: Any = None) -> dict[str, Any]:
         "active_scope_keys": list(scope_text_map.keys()),
         "partial_mode": partial_mode,
         "review_round": int(state.get("review_round") or 0),
-        "max_review_rounds": int(
-            state.get("max_review_rounds") or load_config().standard_review.max_review_rounds
-        ),
+        "max_review_rounds": _max_review_rounds_from_state(state),
         "errors": errors,
         "warnings": warnings,
         "trace_events": trace + [emit_event(state, "ingest", "success", {"scope_count": len(scope_text_map)})],

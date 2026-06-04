@@ -108,11 +108,12 @@ def test_direct_review_endpoint_calls_standard_review(monkeypatch) -> None:
     calls = {}
 
     class FakeRuns:
-        async def wait(self, thread_id, assistant_id, *, input, raise_error):
+        async def wait(self, thread_id, assistant_id, *, input, raise_error, if_not_exists):
             calls["thread_id"] = thread_id
             calls["assistant_id"] = assistant_id
             calls["input"] = input
             calls["raise_error"] = raise_error
+            calls["if_not_exists"] = if_not_exists
             return {
                 "job_id": "job_test",
                 "trace_id": "trace_test",
@@ -152,12 +153,78 @@ def test_direct_review_endpoint_calls_standard_review(monkeypatch) -> None:
     assert response.json()["passed"] is True
     assert calls["assistant_id"] == "standard_review"
     assert calls["raise_error"] is True
+    assert calls["if_not_exists"] == "create"
     assert calls["input"]["target_scopes"] == ["scope", "normative_references"]
+
+
+def test_direct_review_endpoint_falls_back_to_stream_when_wait_missing(monkeypatch) -> None:
+    calls = {"stream": False}
+
+    class FakeRuns:
+        async def wait(self, thread_id, assistant_id, *, input, raise_error, if_not_exists):
+            raise RuntimeError(
+                "Client error '404 Not Found' for url "
+                "'http://127.0.0.1:2024/threads/t/runs/wait'"
+            )
+
+        async def stream(
+            self,
+            thread_id,
+            assistant_id,
+            *,
+            input,
+            stream_mode,
+            stream_subgraphs,
+            if_not_exists,
+        ):
+            calls["stream"] = True
+            calls["stream_mode"] = stream_mode
+            calls["if_not_exists"] = if_not_exists
+            yield {
+                "event": "values",
+                "data": {
+                    "job_id": "job_test",
+                    "trace_id": "trace_test",
+                    "status": "success",
+                    "aggregate_summary": {"total_issues": 0, "failed": 0},
+                    "output_paths": {},
+                },
+            }
+
+    class FakeClient:
+        runs = FakeRuns()
+
+    monkeypatch.setattr(app_mod, "get_langgraph_client", lambda: FakeClient())
+    monkeypatch.setattr(
+        app_mod,
+        "_direct_review_response",
+        lambda *, thread_id, payload, state_result: {
+            "status": "completed",
+            "thread_id": thread_id,
+            "passed": True,
+            "state_status": state_result["status"],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/review-jobs/standard-review",
+        json={
+            "thread_id": "review-test",
+            "file_path": "/workspace/input/uploads/review-test/draft.md",
+            "review_options": {"mode": "scoped_content", "target_scopes": ["foreword"]},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["state_status"] == "success"
+    assert calls["stream"] is True
+    assert calls["stream_mode"] == ["values"]
+    assert calls["if_not_exists"] == "create"
 
 
 def test_direct_review_endpoint_returns_502_on_upstream_error(monkeypatch) -> None:
     class FakeRuns:
-        async def wait(self, thread_id, assistant_id, *, input, raise_error):
+        async def wait(self, thread_id, assistant_id, *, input, raise_error, if_not_exists):
             raise PermissionError("workspace output denied")
 
     class FakeClient:

@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>标准文档助手 · Deep Agents 框架分析</title>
+<title>标准文档助手 · Deep Agents 框架代码精读</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
 <style>
   :root {
-    --bg: #0b1020;
-    --bg-2: #111935;
-    --card: #182241;
-    --card-2: #1f2a4d;
+    --bg: #0a0f1f;
+    --bg-2: #0f1530;
+    --card: #161e3c;
+    --card-2: #1c2549;
     --line: #2a3563;
     --text: #e6ecff;
     --muted: #97a3c4;
@@ -19,8 +20,8 @@
     --amber: #f59e0b;
     --rose: #f43f5e;
     --indigo: #818cf8;
-    --code-bg: #0e1530;
-    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --code-bg: #0b1124;
+    --shadow: 0 12px 36px rgba(0,0,0,0.45);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -33,767 +34,1539 @@
       var(--bg);
     color: var(--text);
     line-height: 1.65;
+    font-size: 14px;
   }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .layout { display: grid; grid-template-columns: 240px 1fr; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
 
-  /* Layout */
-  .container { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
-  header.hero {
-    padding: 56px 0 24px;
-    border-bottom: 1px solid var(--line);
+  aside.sidebar {
+    position: sticky; top: 0; align-self: start;
+    height: 100vh; overflow-y: auto;
+    background: rgba(11, 16, 32, 0.75);
+    backdrop-filter: blur(10px);
+    border-right: 1px solid var(--line);
+    padding: 18px 14px;
   }
+  aside.sidebar h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin: 18px 0 8px; }
+  aside.sidebar ul { list-style: none; margin: 0; padding: 0; }
+  aside.sidebar li a {
+    display: block; padding: 6px 10px; border-radius: 6px;
+    color: var(--text); font-size: 13px;
+  }
+  aside.sidebar li a:hover { background: var(--card); text-decoration: none; }
+  aside.sidebar li a.active { background: rgba(91,140,255,0.18); color: #c8d6ff; }
+  .brand { font-weight: 700; font-size: 14px; color: #c8d6ff; }
+  .brand small { color: var(--muted); font-weight: 400; display: block; font-size: 11px; }
+
+  main { padding: 32px 36px 80px; }
+  header.hero { margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
   .badge {
-    display: inline-block;
-    padding: 4px 10px;
-    background: rgba(91, 140, 255, 0.15);
-    color: #c8d6ff;
-    border: 1px solid rgba(91, 140, 255, 0.35);
-    border-radius: 999px;
-    font-size: 12px;
-    letter-spacing: 0.5px;
+    display: inline-block; padding: 4px 10px;
+    background: rgba(91, 140, 255, 0.15); color: #c8d6ff;
+    border: 1px solid rgba(91, 140, 255, 0.35); border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.5px;
   }
   h1 {
-    font-size: 36px;
-    line-height: 1.2;
-    margin: 16px 0 8px;
+    font-size: 30px; line-height: 1.2; margin: 14px 0 8px;
     background: linear-gradient(90deg, #c8d6ff, #b6a3ff 50%, #8ce5d4);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
   }
-  .subtitle { color: var(--muted); font-size: 15px; max-width: 880px; }
+  .subtitle { color: var(--muted); font-size: 14px; max-width: 980px; }
+  section { margin: 44px 0; }
+  h2 { font-size: 22px; margin: 0 0 14px; padding-left: 12px; border-left: 4px solid var(--accent); }
+  h3 { font-size: 17px; margin: 18px 0 8px; color: #d6deff; }
+  h4 { font-size: 14px; margin: 12px 0 6px; color: #b6c0e0; }
 
-  /* Nav */
-  nav.toc {
-    position: sticky; top: 0; z-index: 10;
-    background: rgba(11, 16, 32, 0.85);
-    backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--line);
-    padding: 12px 24px;
-  }
-  nav.toc ul { display: flex; flex-wrap: wrap; gap: 8px 14px; list-style: none; margin: 0; padding: 0; }
-  nav.toc a {
-    color: var(--muted); font-size: 13px;
-    padding: 6px 10px; border-radius: 8px;
-  }
-  nav.toc a:hover { background: var(--card); color: var(--text); text-decoration: none; }
-
-  section { margin: 48px 0; }
-  h2 {
-    font-size: 24px; margin: 0 0 16px;
-    padding-left: 12px; border-left: 4px solid var(--accent);
-  }
-  h3 { font-size: 18px; margin: 20px 0 10px; color: #d6deff; }
-  h4 { font-size: 15px; margin: 14px 0 6px; color: #b6c0e0; }
-
-  .grid { display: grid; gap: 16px; }
+  .grid { display: grid; gap: 14px; }
   .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  @media (max-width: 900px) {
-    .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  .grid.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  @media (max-width: 1100px) {
+    .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: repeat(2, minmax(0,1fr)); }
   }
-
+  @media (max-width: 700px) {
+    .grid.cols-2, .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: 1fr; }
+  }
   .card {
     background: linear-gradient(180deg, var(--card), var(--card-2));
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 18px 18px 16px;
-    box-shadow: var(--shadow);
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 16px 14px; box-shadow: var(--shadow);
   }
   .card h3 { margin-top: 0; }
-  .card .meta { color: var(--muted); font-size: 13px; }
+  .card .meta { color: var(--muted); font-size: 12px; }
   .card ul { margin: 8px 0 0 18px; padding: 0; }
-  .card li { margin: 4px 0; }
-
+  .card li { margin: 3px 0; font-size: 13px; }
   .pill {
-    display: inline-block; font-size: 12px; padding: 2px 8px;
+    display: inline-block; font-size: 11px; padding: 2px 8px;
     border-radius: 999px; border: 1px solid var(--line);
-    background: var(--bg-2); color: #c8d0ee; margin-right: 6px;
+    background: var(--bg-2); color: #c8d0ee; margin: 2px 4px 2px 0;
   }
   .pill.accent { background: rgba(91,140,255,0.15); border-color: rgba(91,140,255,0.4); color: #c8d6ff; }
   .pill.green  { background: rgba(45,212,191,0.12); border-color: rgba(45,212,191,0.4); color: #b8f0e6; }
   .pill.amber  { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.4); color: #fde2b0; }
-  .pill.rose   { background: rgba(244,63,94,0.12); border-color: rgba(244,63,94,0.4); color: #fbc3cf; }
-  .pill.indigo { background: rgba(129,140,248,0.12); border-color: rgba(129,140,248,0.4); color: #d2d6fb; }
+  .pill.rose   { background: rgba(244,63,94,0.12);  border-color: rgba(244,63,94,0.4);  color: #fbc3cf; }
+  .pill.indigo { background: rgba(129,140,248,0.12);border-color: rgba(129,140,248,0.4);color: #d2d6fb; }
 
-  pre, code {
-    font-family: "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
-  }
   code.inline {
+    font-family: "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
     background: var(--code-bg); border: 1px solid var(--line);
-    padding: 1px 6px; border-radius: 6px; font-size: 12.5px;
+    padding: 1px 6px; border-radius: 5px; font-size: 12.5px; color: #f0e7ff;
   }
-  pre.block {
-    background: var(--code-bg); border: 1px solid var(--line);
-    border-radius: 12px; padding: 14px 16px;
+  pre[class*="language-"] {
+    background: var(--code-bg) !important;
+    border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px;
     overflow-x: auto; font-size: 12.5px; line-height: 1.55;
-    color: #d8e0f5;
+    margin: 8px 0;
   }
-  pre.block .k { color: #f0a8ff; }   /* keyword */
-  pre.block .s { color: #b8f0e6; }   /* string */
-  pre.block .c { color: #8893b5; font-style: italic; }
-  pre.block .n { color: #ffd591; }   /* number */
-  pre.block .v { color: #c8d6ff; }
+  pre[class*="language-"] code { font-family: "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace; }
+  .file-ref {
+    font-family: "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
+    font-size: 12px; color: #b6c0e0;
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    padding: 4px 10px; border-radius: 0 6px 6px 0;
+    display: inline-block; margin: 4px 0;
+  }
+  .file-ref a { color: #c8d6ff; }
+  .file-ref .ln { color: #6e7aa0; margin-left: 8px; }
 
-  /* Diagram */
   .diagram {
     background: var(--card); border: 1px solid var(--line);
-    border-radius: 16px; padding: 22px; overflow-x: auto;
+    border-radius: 14px; padding: 20px; overflow-x: auto; margin: 10px 0;
   }
   .diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
 
-  /* Table */
   table {
     width: 100%; border-collapse: collapse; margin-top: 8px;
     background: var(--card); border: 1px solid var(--line);
-    border-radius: 12px; overflow: hidden;
+    border-radius: 10px; overflow: hidden;
   }
-  th, td {
-    padding: 10px 12px; text-align: left; vertical-align: top;
-    border-bottom: 1px solid var(--line); font-size: 13.5px;
-  }
+  th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 13px; }
   th { background: var(--bg-2); color: #c8d6ff; font-weight: 600; }
   tr:last-child td { border-bottom: none; }
 
-  /* Flow */
-  .flow {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-  }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .node {
     background: var(--card-2); border: 1px solid var(--line);
-    border-radius: 10px; padding: 8px 12px; font-size: 13px;
+    border-radius: 8px; padding: 6px 10px; font-size: 12.5px; color: #d6deff;
   }
   .arrow { color: var(--muted); }
 
-  .legend {
-    display: flex; flex-wrap: wrap; gap: 12px;
-    font-size: 12.5px; color: var(--muted); margin-top: 8px;
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin: 12px 0 16px; }
+  .tab {
+    padding: 8px 14px; cursor: pointer; font-size: 13px;
+    color: var(--muted); border: 1px solid transparent; border-bottom: none;
+    border-radius: 8px 8px 0 0;
   }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .legend i {
-    width: 12px; height: 12px; border-radius: 3px; display: inline-block;
+  .tab:hover { color: var(--text); background: var(--card); }
+  .tab.active {
+    color: #c8d6ff; background: var(--card);
+    border-color: var(--line); border-bottom-color: var(--card);
+    position: relative; top: 1px;
   }
+  .tab-panel { display: none; padding: 12px 0; }
+  .tab-panel.active { display: block; }
 
-  footer {
-    color: var(--muted); font-size: 12.5px;
-    border-top: 1px solid var(--line); padding-top: 18px; margin-top: 56px;
+  .search {
+    display: flex; gap: 8px; align-items: center;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 6px 10px; margin: 8px 0 12px;
   }
+  .search input { flex: 1; background: transparent; border: none; outline: none; color: var(--text); font-size: 13px; padding: 6px; }
+  .search input::placeholder { color: var(--muted); }
+  .search .count { color: var(--muted); font-size: 12px; }
+
+  details.acc {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 14px; margin: 8px 0;
+  }
+  details.acc[open] { background: var(--card-2); }
+  details.acc > summary { cursor: pointer; font-weight: 600; color: #d6deff; list-style: none; display: flex; align-items: center; gap: 10px; }
+  details.acc > summary::before { content: "▸"; color: var(--accent); transition: transform 0.2s; }
+  details.acc[open] > summary::before { transform: rotate(90deg); }
+  details.acc > summary::-webkit-details-marker { display: none; }
+  details.acc > .body { padding-top: 10px; color: var(--muted); font-size: 13px; }
+
+  mark { background: rgba(245, 158, 11, 0.35); color: #fde2b0; padding: 0 2px; border-radius: 3px; }
+  .hidden { display: none !important; }
+  footer { color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 16px; margin-top: 50px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .right { text-align: right; }
+  .scroll-x { overflow-x: auto; }
 </style>
 </head>
 <body>
 
-<nav class="toc">
-  <ul>
-    <li><a href="#overview">1. 概览</a></li>
-    <li><a href="#framework">2. Deep Agents 框架</a></li>
-    <li><a href="#architecture">3. 项目架构</a></li>
-    <li><a href="#main-agent">4. 主 Agent 编排</a></li>
-    <li><a href="#subagents">5. 5 个 SubAgent</a></li>
-    <li><a href="#backend">6. Backend 路由</a></li>
-    <li><a href="#permissions">7. 权限矩阵</a></li>
-    <li><a href="#hitl">8. HITL 审批</a></li>
-    <li><a href="#tools">9. 业务工具</a></li>
-    <li><a href="#skills">10. Skills 体系</a></li>
-    <li><a href="#flow">11. 端到端流程</a></li>
-    <li><a href="#alignment">12. 与 Deep Agents 范式对齐</a></li>
-  </ul>
-</nav>
+<div class="layout">
 
-<div class="container">
-  <header class="hero">
-    <span class="badge">基于 LangChain Deep Agents SDK</span>
-    <h1>标准文档助手 · Deep Agents 框架分析</h1>
-    <p class="subtitle">
-      本文件结合 LangChain 官方 Deep Agents 文档（<a href="https://docs.langchain.com/oss/python/deepagents/overview">overview</a>、<a href="https://docs.langchain.com/oss/python/deepagents/customization">customization</a>、<a href="https://docs.langchain.com/oss/python/deepagents/human-in-the-loop">human-in-the-loop</a>、<a href="https://docs.langchain.com/oss/python/deepagents/context-engineering">context-engineering</a>、<a href="https://docs.langchain.com/langsmith/managed-deep-agents-overview">managed-deep-agents</a>）
-      对 <code class="inline">d:\CNS_Assistant\src\standard_document_assistant</code> 中
-      <code class="inline">create_deep_agent</code> 工厂的集成方式做系统性拆解，并辅以可视化图示。
-    </p>
-  </header>
-
-  <!-- 1. 概览 -->
-  <section id="overview">
-    <h2>1. 一句话概览</h2>
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>项目定位</h3>
-        <p>
-          标准文档助手（<code class="inline">standard-document-assistant</code>）是一个面向国标/行标 PDF/Word 的智能体，
-          覆盖 <span class="pill accent">解析</span> <span class="pill accent">元数据抽取</span>
-          <span class="pill accent">内容审核</span> <span class="pill accent">格式审核</span>
-          <span class="pill accent">草稿生成</span> 五大业务场景，基于
-          <code class="inline">deepagents.create_deep_agent</code> 构造。
-        </p>
-      </div>
-      <div class="card">
-        <h3>Deep Agents 范式</h3>
-        <p>
-          官方把 Deep Agents 称为“<strong>agent harness</strong>”：以 LangGraph 的工具调用循环为底座，
-          内置 <strong>任务规划</strong>、<strong>文件系统</strong>、<strong>子代理</strong>、
-          <strong>长期记忆</strong>、<strong>HITL</strong>、<strong>上下文工程</strong> 6 大能力。
-          本项目正是把这套 harness 按 GB 标准审核业务“填实”。
-        </p>
-      </div>
+  <aside class="sidebar">
+    <div class="brand">标准文档助手<small>Deep Agents 框架精读</small></div>
+    <div class="search" style="margin-top:12px;">
+      <input type="text" id="searchInput" placeholder="搜索工具 / SubAgent / 章节..." />
     </div>
-  </section>
 
-  <!-- 2. Deep Agents 框架 -->
-  <section id="framework">
-    <h2>2. Deep Agents 框架核心能力（官方视角）</h2>
-    <div class="grid cols-3">
-      <div class="card">
-        <h3>① 任务规划 (Planning)</h3>
-        <p class="meta">内置 todo 工具，复杂任务先拆解步骤再执行。</p>
-        <p>本项目由 <code class="inline">MAIN_SYSTEM_PROMPT</code> 强制要求主 Agent 在复杂任务前
-          调用 <code class="inline">write_todos</code>。</p>
-      </div>
-      <div class="card">
-        <h3>② 文件系统 (Filesystem)</h3>
-        <p class="meta">Backend 抽象：State/Store/Filesystem/Composite。</p>
-        <p>本项目使用 <code class="inline">CompositeBackend</code>，将
-          <code class="inline">/memories/</code>、<code class="inline">/skills/</code>、
-          <code class="inline">/workspace/</code> 三类虚拟路径分别路由到不同后端。</p>
-      </div>
-      <div class="card">
-        <h3>③ 上下文工程 (Context Engineering)</h3>
-        <p class="meta">system prompt + memory + skills + middleware 多源组装。</p>
-        <p>本项目启动时加载 <code class="inline">/memories/AGENTS.md</code>、
-          <code class="inline">/memories/preferences.md</code>，技能目录按需注入。</p>
-      </div>
-      <div class="card">
-        <h3>④ 子代理 (Subagents)</h3>
-        <p class="meta">隔离上下文、可并行、专业化分工。</p>
-        <p>本项目注册了 <strong>parser / extractor / reviewer / research / writer</strong> 5 个
-          SubAgent，分别负责不同业务链路。</p>
-      </div>
-      <div class="card">
-        <h3>⑤ HITL (Human-in-the-loop)</h3>
-        <p class="meta">通过 <code class="inline">interrupt_on</code> 在敏感工具调用前暂停。</p>
-        <p>本项目对写文件、命令执行、记忆更新、MinerU 解析、审核等敏感工具配置了
-          <code class="inline">["approve", "edit"]</code> 决策。</p>
-      </div>
-      <div class="card">
-        <h3>⑥ 长期记忆 (Memory)</h3>
-        <p class="meta">StoreBackend + LangGraph Store，支持按用户/助手隔离 namespace。</p>
-        <p>本项目通过 <code class="inline">seed_memory_store</code> 启动注入
-          <code class="inline">AGENTS.md / preferences.md / project-notes.md</code>。</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- 3. 项目架构 -->
-  <section id="architecture">
-    <h2>3. 项目架构总览</h2>
-    <div class="diagram">
-      <svg viewBox="0 0 1080 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="架构总览">
-        <defs>
-          <linearGradient id="gMain" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#7c5bff"/>
-          </linearGradient>
-          <linearGradient id="gSub" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0" stop-color="#1f2a4d"/><stop offset="1" stop-color="#182241"/>
-          </linearGradient>
-          <linearGradient id="gTool" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0" stop-color="#0e1530"/><stop offset="1" stop-color="#111935"/>
-          </linearGradient>
-          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" fill="#97a3c4"/>
-          </marker>
-        </defs>
-
-        <!-- 用户 -->
-        <rect x="20" y="40" width="160" height="60" rx="10" fill="url(#gTool)" stroke="#2a3563"/>
-        <text x="100" y="68" text-anchor="middle" fill="#e6ecff" font-size="14">用户 / 上传文件</text>
-        <text x="100" y="86" text-anchor="middle" fill="#97a3c4" font-size="12">FastAPI BFF · SSE</text>
-
-        <!-- 主 Agent -->
-        <rect x="260" y="30" width="260" height="100" rx="14" fill="url(#gMain)"/>
-        <text x="390" y="62" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">Main Agent</text>
-        <text x="390" y="84" text-anchor="middle" fill="#e6ecff" font-size="12">MAIN_SYSTEM_PROMPT</text>
-        <text x="390" y="102" text-anchor="middle" fill="#c8d6ff" font-size="12">Qwen · TodoWrite · File Tools</text>
-        <text x="390" y="120" text-anchor="middle" fill="#c8d6ff" font-size="12">AgentResult schema</text>
-
-        <!-- SubAgents -->
-        <g font-size="12" fill="#e6ecff">
-          <rect x="20" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
-          <text x="110" y="226" text-anchor="middle" font-weight="700">parser</text>
-          <text x="110" y="244" text-anchor="middle" fill="#97a3c4">parse_file_with_mineru</text>
-          <text x="110" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-parsing</text>
-
-          <rect x="220" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
-          <text x="310" y="226" text-anchor="middle" font-weight="700">extractor</text>
-          <text x="310" y="244" text-anchor="middle" fill="#97a3c4">extract_standard_metadata</text>
-          <text x="310" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-extraction</text>
-
-          <rect x="420" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
-          <text x="510" y="226" text-anchor="middle" font-weight="700">reviewer</text>
-          <text x="510" y="244" text-anchor="middle" fill="#97a3c4">run_standard_review</text>
-          <text x="510" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-review</text>
-
-          <rect x="620" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
-          <text x="710" y="226" text-anchor="middle" font-weight="700">research</text>
-          <text x="710" y="244" text-anchor="middle" fill="#97a3c4">参考资料梳理</text>
-          <text x="710" y="262" text-anchor="middle" fill="#97a3c4">仅基于现有材料</text>
-
-          <rect x="820" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
-          <text x="910" y="226" text-anchor="middle" font-weight="700">writer</text>
-          <text x="910" y="244" text-anchor="middle" fill="#97a3c4">write_file 写草稿</text>
-          <text x="910" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-drafting</text>
-        </g>
-
-        <!-- Backend 三栏 -->
-        <g font-size="12" fill="#e6ecff">
-          <rect x="60" y="370" width="280" height="160" rx="12" fill="url(#gTool)" stroke="#2a3563"/>
-          <text x="200" y="396" text-anchor="middle" font-weight="700" fill="#c8d6ff">FilesystemBackend · /workspace/</text>
-          <text x="80" y="420" fill="#97a3c4">root = WORKSPACE_ROOT</text>
-          <text x="80" y="440" fill="#97a3c4">· /workspace/input/uploads/{thread_id}/</text>
-          <text x="80" y="458" fill="#97a3c4">· /workspace/output/mineru|metadata|reports|drafts</text>
-          <text x="80" y="476" fill="#97a3c4">· /workspace/templates · /workspace/tmp</text>
-          <text x="80" y="504" fill="#2dd4bf" font-size="11">本机开启；langgraph_server 部署默认关闭</text>
-          <text x="80" y="520" fill="#2dd4bf" font-size="11">可通过 STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1 打开</text>
-
-          <rect x="400" y="370" width="280" height="160" rx="12" fill="url(#gTool)" stroke="#2a3563"/>
-          <text x="540" y="396" text-anchor="middle" font-weight="700" fill="#c8d6ff">StoreBackend · /memories/</text>
-          <text x="420" y="420" fill="#97a3c4">namespace = (assistant_id, user_id)</text>
-          <text x="420" y="440" fill="#97a3c4">· AGENTS.md · preferences.md</text>
-          <text x="420" y="458" fill="#97a3c4">· project-notes.md (seed)</text>
-          <text x="420" y="488" fill="#f59e0b" font-size="11">只读；变更走 propose_memory_update + HITL</text>
-          <text x="420" y="506" fill="#f59e0b" font-size="11">运行时写回 Store，部署侧 Postgres</text>
-          <text x="420" y="524" fill="#97a3c4">local: InMemoryStore · server: 平台托管</text>
-
-          <rect x="740" y="370" width="280" height="160" rx="12" fill="url(#gTool)" stroke="#2a3563"/>
-          <text x="880" y="396" text-anchor="middle" font-weight="700" fill="#c8d6ff">FilesystemBackend · /skills/</text>
-          <text x="760" y="420" fill="#97a3c4">root = SKILLS_DIR (项目 skills/)</text>
-          <text x="760" y="440" fill="#97a3c4">· standard-parsing · standard-extraction</text>
-          <text x="760" y="458" fill="#97a3c4">· standard-review · standard-drafting</text>
-          <text x="760" y="488" fill="#f43f5e" font-size="11">权限：read=allow / write=deny</text>
-          <text x="760" y="506" fill="#97a3c4">虚拟模式 virtual_mode=True</text>
-          <text x="760" y="524" fill="#97a3c4">默认走本地；部署可切到 StoreBackend</text>
-        </g>
-
-        <!-- 箭头 -->
-        <g stroke="#97a3c4" fill="none" stroke-width="1.5">
-          <line x1="180" y1="70" x2="260" y2="70" marker-end="url(#arr)"/>
-          <line x1="390" y1="130" x2="110" y2="200" marker-end="url(#arr)"/>
-          <line x1="390" y1="130" x2="310" y2="200" marker-end="url(#arr)"/>
-          <line x1="390" y1="130" x2="510" y2="200" marker-end="url(#arr)"/>
-          <line x1="390" y1="130" x2="710" y2="200" marker-end="url(#arr)"/>
-          <line x1="390" y1="130" x2="910" y2="200" marker-end="url(#arr)"/>
-          <line x1="200" y1="530" x2="540" y2="600" marker-end="url(#arr)"/>
-          <line x1="540" y1="530" x2="540" y2="600" marker-end="url(#arr)"/>
-          <line x1="880" y1="530" x2="540" y2="600" marker-end="url(#arr)"/>
-        </g>
-        <text x="540" y="612" text-anchor="middle" fill="#c8d6ff" font-size="13">CompositeBackend · default = StateBackend (短期 scratch)</text>
-      </svg>
-    </div>
-    <div class="legend">
-      <span><i style="background:linear-gradient(90deg,#5b8cff,#7c5bff)"></i>主 Agent</span>
-      <span><i style="background:#1f2a4d"></i>SubAgent</span>
-      <span><i style="background:#0e1530"></i>Backend / Tool</span>
-    </div>
-  </section>
-
-  <!-- 4. 主 Agent 编排 -->
-  <section id="main-agent">
-    <h2>4. 主 Agent 编排（agent.py · build_standard_document_agent）</h2>
-    <p>
-      主 Agent 通过 <code class="inline">create_deep_agent(**agent_kwargs)</code> 一次性注入：
-    </p>
-    <pre class="block"><span class="c"># 来源：src/standard_document_assistant/agent.py</span>
-agent = create_deep_agent(
-    name=<span class="s">"standard-document-assistant"</span>,
-    model=build_qwen_model(config.primary_model, strict=...),
-    system_prompt=<span class="v">MAIN_SYSTEM_PROMPT</span>,
-    tools=<span class="v">STANDARD_DOCUMENT_TOOLS</span>,                 <span class="c"># validate_output_schema, propose_memory_update</span>
-    memory=[<span class="s">"/memories/AGENTS.md"</span>, <span class="s">"/memories/preferences.md"</span>],
-    skills=[<span class="s">"/skills/"</span>],
-    subagents=build_subagents(...),
-    backend=build_backend(...),
-    permissions=build_permissions(),
-    response_format=<span class="v">AgentResult</span>,
-    interrupt_on={                                <span class="c"># 主 Agent 直接调用层</span>
-        <span class="s">"write_file"</span>:           {<span class="s">"allowed_decisions"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>]},
-        <span class="s">"edit_file"</span>:            {<span class="s">"allowed_decisions"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>]},
-        <span class="s">"propose_memory_update"</span>:{<span class="s">"allowed_decisions"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>]},
-        <span class="s">"execute"</span>:              {<span class="s">"allowed_decisions"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>]},
-    },
-    checkpointer=<span class="v">MemorySaver</span> | <span class="k">None</span>,               <span class="c"># langgraph_server=True 时由平台注入</span>
-    store=<span class="v">InMemoryStore</span> | <span class="k">None</span>,                      <span class="c"># 同上</span>
-)</pre>
-
-    <h3>关键设计点</h3>
+    <h3>框架概览</h3>
     <ul>
-      <li><strong>本地与部署双模式：</strong>
-        <code class="inline">langgraph_server</code> 开关决定是否让平台托管 checkpointer / store。
-        本地默认 <code class="inline">MemorySaver + InMemoryStore</code>（注意：仅开发使用）。</li>
-      <li><strong>结构化输出：</strong>
-        <code class="inline">response_format=AgentResult</code> 强制主 Agent 返回
-        <code class="inline">summary / artifacts / quality_warnings / next_actions / download</code>。</li>
-      <li><strong>Skills 注入方式：</strong>
-        <code class="inline">skills=["/skills/"]</code> 必须使用虚拟路径，Deep Agents 运行时会自动按需加载。</li>
-      <li><strong>HITL 分层：</strong>
-        主 Agent 层只覆盖“主 Agent 自身直调”的工具；subagent 内的工具由
-        <code class="inline">build_subagents</code> 内部单独声明，避免重复。</li>
+      <li><a href="#overview">1. 一句话概览</a></li>
+      <li><a href="#framework">2. Deep Agents 框架</a></li>
+      <li><a href="#docs-refs">3. 官方文档参考</a></li>
     </ul>
-  </section>
 
-  <!-- 5. SubAgents -->
-  <section id="subagents">
-    <h2>5. 5 个 SubAgent 分工</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>SubAgent</th><th>职责</th><th>绑定 Skill</th><th>核心工具</th><th>HITL 工具（决策粒度）</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><span class="pill accent">parser</span></td>
-          <td>PDF/Word → Markdown + manifest + 封面元数据</td>
-          <td><code class="inline">/skills/standard-parsing</code></td>
-          <td><code class="inline">parse_file_with_mineru</code></td>
-          <td><code class="inline">parse_file_with_mineru</code> → approve / edit</td>
-        </tr>
-        <tr>
-          <td><span class="pill accent">extractor</span></td>
-          <td>Markdown → 国标元数据 JSON</td>
-          <td><code class="inline">/skills/standard-extraction</code></td>
-          <td><code class="inline">extract_standard_metadata</code>、<code class="inline">validate_output_schema</code></td>
-          <td><code class="inline">extract_standard_metadata</code> → approve / edit</td>
-        </tr>
-        <tr>
-          <td><span class="pill accent">reviewer</span></td>
-          <td>内容轨 + 格式轨审核</td>
-          <td><code class="inline">/skills/standard-review</code></td>
-          <td><code class="inline">parse_file_with_mineru</code>、<code class="inline">run_standard_review</code>、<code class="inline">run_format_source_review</code>、<code class="inline">inspect_review_rules</code>、<code class="inline">build_review_index</code>、<code class="inline">validate_review_result_schema</code></td>
-          <td>parse / run_standard_review / run_format_source_review / build_review_index → approve / edit</td>
-        </tr>
-        <tr>
-          <td><span class="pill indigo">research</span></td>
-          <td>参考资料梳理（仅基于现有材料）</td>
-          <td>—</td>
-          <td>内置文件工具</td>
-          <td>无</td>
-        </tr>
-        <tr>
-          <td><span class="pill indigo">writer</span></td>
-          <td>生成标准文档草稿</td>
-          <td><code class="inline">/skills/standard-drafting</code></td>
-          <td><code class="inline">validate_output_schema</code>、<code class="inline">write_file</code>（内置）</td>
-          <td>受主 Agent 层 <code class="inline">write_file</code> 覆盖</td>
-        </tr>
-      </tbody>
-    </table>
-    <p style="color:var(--muted); font-size:13px; margin-top:10px;">
-      说明：<span class="pill amber">reject</span> 决策被显式禁用为“默认场景”，仅在更严格的策略下作为白名单打开，
-      避免在 <code class="inline">langgraph dev</code> 中出现
-      <code class="inline">TypeError: string indices must be integers, not 'str'</code> 这类 resume 兼容问题。
-    </p>
-  </section>
+    <h3>项目骨架</h3>
+    <ul>
+      <li><a href="#layout">4. 目录结构</a></li>
+      <li><a href="#entry">5. 入口与 langgraph.json</a></li>
+    </ul>
 
-  <!-- 6. Backend 路由 -->
-  <section id="backend">
-    <h2>6. Backend 路由（CompositeBackend）</h2>
-    <p>
-      官方建议在多源存储场景下用 <code class="inline">CompositeBackend</code>：把不同虚拟路径前缀路由到不同后端实现。
-      本项目 <code class="inline">build_backend()</code> 的路由表：
-    </p>
-    <pre class="block"><span class="k">CompositeBackend</span>(
-    default=<span class="v">StateBackend</span>(),                                    <span class="c"># 短期 scratch / 大工具结果 offload</span>
+    <h3>主 Agent</h3>
+    <ul>
+      <li><a href="#main-agent">6. 主 Agent 工厂</a></li>
+      <li><a href="#system-prompt">7. 系统提示词</a></li>
+      <li><a href="#config-model">8. 模型与配置</a></li>
+    </ul>
+
+    <h3>SubAgents</h3>
+    <ul>
+      <li><a href="#subagents">9. 5 个 SubAgent 总览</a></li>
+      <li><a href="#customize-subagent">10. 如何自定义 SubAgent</a></li>
+    </ul>
+
+    <h3>Skills</h3>
+    <ul>
+      <li><a href="#skills">11. 4 个 Skill 总览</a></li>
+      <li><a href="#customize-skill">12. 如何自定义 Skill</a></li>
+    </ul>
+
+    <h3>Tools</h3>
+    <ul>
+      <li><a href="#tools">13. 9 个业务工具</a></li>
+      <li><a href="#customize-tool">14. 如何自定义 Tool</a></li>
+    </ul>
+
+    <h3>基础设施</h3>
+    <ul>
+      <li><a href="#backend">15. Backend 与内存</a></li>
+      <li><a href="#permissions">16. 路径权限</a></li>
+      <li><a href="#hitl">17. HITL 审批</a></li>
+      <li><a href="#subgraph">18. 子图与 Runtime Context</a></li>
+      <li><a href="#tracing">19. Tracing / SSE</a></li>
+    </ul>
+
+    <h3>端到端</h3>
+    <ul>
+      <li><a href="#bff">20. FastAPI BFF</a></li>
+      <li><a href="#flow">21. 端到端流程</a></li>
+      <li><a href="#alignment">22. 与官方范式对齐</a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <span class="badge">基于 LangChain Deep Agents SDK</span>
+      <h1>标准文档助手 · Deep Agents 框架代码精读</h1>
+      <p class="subtitle">
+        本文件逐代码讲解 <code class="inline">d:\deep-agents\src\standard_document_assistant</code> 下的标准文档助手，
+        配套 docs.langchain 官方 Deep Agents 文档（overview / customization / human-in-the-loop / context-engineering / subagents / backends / skills），
+        并指出<strong>如何自定义 tools / skills / subagents</strong>，以及它们<strong>在哪里、如何被调用</strong>。
+      </p>
+    </header>
+
+    <section id="overview">
+      <h2>1. 一句话概览</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>本项目在做什么</h3>
+          <p>
+            标准文档助手（<code class="inline">standard-document-assistant</code>）是一个面向国标 / 行标
+            PDF / Word 的智能体，覆盖 <span class="pill accent">解析</span>
+            <span class="pill accent">元数据抽取</span> <span class="pill accent">内容审核</span>
+            <span class="pill accent">格式审核</span> <span class="pill accent">草稿生成</span> 五大业务。
+            它通过 <code class="inline">deepagents.create_deep_agent</code> 工厂构造。
+          </p>
+        </div>
+        <div class="card">
+          <h3>Deep Agents 范式</h3>
+          <p>
+            官方称 Deep Agents 为 <strong>"agent harness"</strong>：在 LangGraph 工具调用循环之上，
+            内置 <strong>任务规划</strong>、<strong>文件系统</strong>、<strong>子代理</strong>、
+            <strong>长期记忆</strong>、<strong>技能</strong>、<strong>HITL</strong>、<strong>上下文工程</strong> 7 大能力。
+            本项目把 harness 适配到 GB 标准文档审核业务。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="framework">
+      <h2>2. Deep Agents 框架核心能力</h2>
+      <div class="grid cols-3">
+        <div class="card">
+          <h3>① 任务规划 TodoList</h3>
+          <p class="meta">内置 <code class="inline">write_todos</code>。</p>
+          <p>本项目在 <a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py"><code class="inline">prompts.py:MAIN_SYSTEM_PROMPT</code></a>
+            强制要求主 Agent 在复杂任务前先调用 <code class="inline">write_todos</code>。</p>
+        </div>
+        <div class="card">
+          <h3>② 文件系统 Backend</h3>
+          <p class="meta">State/Store/Filesystem/Composite。</p>
+          <p>本项目使用 <code class="inline">CompositeBackend</code>，把
+            <code class="inline">/memories/</code>、<code class="inline">/skills/</code>、
+            <code class="inline">/workspace/</code> 三类虚拟路径路由到不同后端。</p>
+        </div>
+        <div class="card">
+          <h3>③ SubAgent 委派</h3>
+          <p class="meta">隔离上下文、并行、专业化。</p>
+          <p>本项目注册了 <strong>parser / extractor / reviewer / research / writer</strong> 5 个 SubAgent，
+            主 Agent 通过内置 <code class="inline">task</code> 工具按需委派。</p>
+        </div>
+        <div class="card">
+          <h3>④ 长期记忆</h3>
+          <p class="meta">StoreBackend + LangGraph Store。</p>
+          <p>本项目通过 <code class="inline">seed_memory_store</code> 启动注入
+            <code class="inline">AGENTS.md / preferences.md / project-notes.md</code>。</p>
+        </div>
+        <div class="card">
+          <h3>⑤ Skills 按需加载</h3>
+          <p class="meta">SKILL.md frontmatter 渐进披露。</p>
+          <p>本项目在 <code class="inline">skills/</code> 目录下放 4 个 SKILL.md，启动只读 frontmatter，
+            任务命中 <code class="inline">description</code> 才加载正文。</p>
+        </div>
+        <div class="card">
+          <h3>⑥ HITL 人工审批</h3>
+          <p class="meta"><code class="inline">interrupt_on</code>。</p>
+          <p>本项目对写文件、命令执行、记忆更新、MinerU 解析、审核等敏感工具配置
+            <code class="inline">["approve", "edit"]</code> 决策粒度。</p>
+        </div>
+        <div class="card">
+          <h3>⑦ 结构化输出</h3>
+          <p class="meta"><code class="inline">response_format</code>。</p>
+          <p>本项目通过 <code class="inline">response_format=AgentResult</code> 强制主 Agent 输出
+            <code class="inline">summary / artifacts / quality_warnings / next_actions / download</code>。</p>
+        </div>
+        <div class="card">
+          <h3>⑧ 上下文工程</h3>
+          <p class="meta">system + memory + skills + middleware。</p>
+          <p>本项目把 LangGraph <code class="inline">context_schema</code> 用于子图透传
+            <code class="inline">trace_id / cover_metadata_hint / quality_strict</code>。</p>
+        </div>
+        <div class="card">
+          <h3>⑨ LangGraph 持久化</h3>
+          <p class="meta">checkpointer / store。</p>
+          <p>本地 <code class="inline">MemorySaver + InMemoryStore</code>；部署由 LangGraph Server 注入。
+            <code class="inline">langgraph_server</code> 参数切换。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="docs-refs">
+      <h2>3. 官方文档参考（来自 docs.langchain MCP 搜索）</h2>
+      <p>本节列出 <a href="https://docs.langchain.com/oss/python/deepagents/overview">Deep Agents overview</a>
+        等核心页面的关键点（来自本次 <code class="inline">mcp_docs-langchain_search_docs_by_lang_chain</code> 检索）。</p>
+      <table>
+        <thead><tr><th>官方页面</th><th>关键点</th><th>本项目落地</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/customization#default-stack-main-agent">default-stack-main-agent</a></td>
+            <td>主 Agent 默认 stack：TodoList → Skills → Filesystem → SubAgent → Summarization 等 middleware</td>
+            <td>本项目不显式声明这些 middleware，依赖 <code class="inline">create_deep_agent</code> 默认装配</td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/subagents#default-subagent">default-subagent</a></td>
+            <td>会自动注入 <code class="inline">general-purpose</code> 同步子代理</td>
+            <td>本项目不依赖它，已经显式声明了 5 个 SubAgent</td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/backends#compositebackend-router">composite-backend-router</a></td>
+            <td>CompositeBackend.default=StateBackend + routes={"/memories/": StoreBackend}</td>
+            <td>本项目三条路由：<code class="inline">/memories/</code>→StoreBackend、<code class="inline">/skills/</code>→FilesystemBackend、<code class="inline">/workspace/</code>→FilesystemBackend</td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/human-in-the-loop#always-use-a-checkpointer">human-in-the-loop · always-use-a-checkpointer</a></td>
+            <td>使用 HITL 必须配 checkpointer</td>
+            <td>本项目在 <code class="inline">build_standard_document_agent</code> 中本地模式挂 <code class="inline">MemorySaver</code></td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/skills#full-example">skills · full-example</a></td>
+            <td>SKILL.md 必须含 name/description frontmatter，按需加载</td>
+            <td>4 个 skill 都有完整 frontmatter；后端使用 <code class="inline">FilesystemBackend(virtual_mode=True)</code></td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/context-engineering#long-term-memory">context-engineering · long-term-memory</a></td>
+            <td>长期记忆用于跨 thread 持久化（用户偏好、积累知识）</td>
+            <td>本项目 <code class="inline">/memories/</code> 路由到 StoreBackend，<code class="inline">memory=["/memories/AGENTS.md", ...]</code> 启动加载</td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/langchain/middleware/built-in#to-do-list">built-in · to-do-list</a></td>
+            <td><code class="inline">TodoListMiddleware</code> 自动提供 <code class="inline">write_todos</code></td>
+            <td>本项目 <code class="inline">MAIN_SYSTEM_PROMPT</code> 第 2 条显式要求使用 <code class="inline">write_todos</code></td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.langchain.com/oss/python/deepagents/code/subagents#use-subagents-in-deep-agents-code">managed-deep-agents · subagents</a></td>
+            <td>Deep Agents Code 支持用 <code class="inline">subagents/&lt;name&gt;/AGENTS.md</code> 定义 subagent</td>
+            <td>本项目 <code class="inline">subagents/parser|extractor|reviewer|research|writer/AGENTS.md</code> 同名同步存在</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="layout">
+      <h2>4. 项目目录结构</h2>
+      <pre class="file-ref">d:\deep-agents\</pre>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>顶层文件 / 目录</h3>
+          <ul>
+            <li><a href="file:///d:/deep-agents/AGENTS.md">AGENTS.md</a> · 主 Agent 长期规则（每次启动注入 system prompt）</li>
+            <li><a href="file:///d:/deep-agents/agent.py">agent.py</a> · LangGraph Server 入口（<code class="inline">agent = build_standard_document_agent(...)</code>）</li>
+            <li><a href="file:///d:/deep-agents/langgraph.json">langgraph.json</a> · Server 路由（agent / metadata_extraction / standard_review）</li>
+            <li><a href="file:///d:/deep-agents/config.yaml">config.yaml</a> · 模型/运行/审核配置</li>
+            <li><a href="file:///d:/deep-agents/tools.json">tools.json</a> · Managed Deep Agents 工具清单</li>
+            <li><a href="file:///d:/deep-agents/memories/AGENTS.md">memories/</a> · 长期记忆种子（注入 StoreBackend）</li>
+            <li><a href="file:///d:/deep-agents/subagents/parser/AGENTS.md">subagents/&lt;name&gt;/AGENTS.md</a> · SubAgent 文件（managed 模式兼容）</li>
+            <li><a href="file:///d:/deep-agents/skills/standard-parsing/SKILL.md">skills/&lt;name&gt;/SKILL.md</a> · 技能（Deep Agents 按需加载）</li>
+            <li>src/standard_document_assistant/ · Python 业务包</li>
+            <li>design_docs/ · 设计文档</li>
+            <li>tests/ · 关键节点测试</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>src/standard_document_assistant/</h3>
+          <ul>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py">agent.py</a> · <code class="inline">build_standard_document_agent</code> 工厂（核心）</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">prompts.py</a> · 6 套系统提示词</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/schemas.py">schemas.py</a> · Pydantic schema（AgentResult / Manifest / ReviewIssue 等）</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/config.py">config.py</a> · 配置加载（config.yaml + .env）</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/constants.py">constants.py</a> · 路径常量</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/tracing.py">tracing.py</a> · 子图透传 RunnableConfig</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/__init__.py">tools/</a> · 9 个业务工具</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/graph.py">graphs/standard_review/</a> · 审核子图</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/metadata_extraction/graph.py">graphs/metadata_extraction/</a> · 元数据抽取子图</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/integrations/mineru/client.py">integrations/mineru/</a> · MinerU 客户端</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/knowledge_base.py">review_core/</a> · FAISS 知识库 / LLM Judge</li>
+            <li><a href="file:///d:/deep-agents/src/standard_document_assistant/api/app.py">api/app.py</a> · FastAPI BFF</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>架构总览图（SVG）</h3>
+      <div class="diagram">
+        <svg viewBox="0 0 1080 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="架构总览">
+          <defs>
+            <linearGradient id="gMain" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#7c5bff"/>
+            </linearGradient>
+            <linearGradient id="gSub" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0" stop-color="#1f2a4d"/><stop offset="1" stop-color="#182241"/>
+            </linearGradient>
+            <linearGradient id="gTool" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0" stop-color="#0e1530"/><stop offset="1" stop-color="#111935"/>
+            </linearGradient>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="#97a3c4"/>
+            </marker>
+          </defs>
+          <rect x="20" y="40" width="160" height="60" rx="10" fill="url(#gTool)" stroke="#2a3563"/>
+          <text x="100" y="68" text-anchor="middle" fill="#e6ecff" font-size="14">用户 / 上传文件</text>
+          <text x="100" y="86" text-anchor="middle" fill="#97a3c4" font-size="12">FastAPI BFF · SSE</text>
+
+          <rect x="260" y="30" width="260" height="100" rx="14" fill="url(#gMain)"/>
+          <text x="390" y="62" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">Main Agent</text>
+          <text x="390" y="84" text-anchor="middle" fill="#e6ecff" font-size="12">MAIN_SYSTEM_PROMPT</text>
+          <text x="390" y="102" text-anchor="middle" fill="#c8d6ff" font-size="12">Qwen · TodoWrite · File Tools</text>
+          <text x="390" y="120" text-anchor="middle" fill="#c8d6ff" font-size="12">AgentResult schema</text>
+
+          <g font-size="12" fill="#e6ecff">
+            <rect x="20"  y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
+            <text x="110" y="226" text-anchor="middle" font-weight="700">parser</text>
+            <text x="110" y="244" text-anchor="middle" fill="#97a3c4">parse_file_with_mineru</text>
+            <text x="110" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-parsing</text>
+
+            <rect x="220" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
+            <text x="310" y="226" text-anchor="middle" font-weight="700">extractor</text>
+            <text x="310" y="244" text-anchor="middle" fill="#97a3c4">extract_standard_metadata</text>
+            <text x="310" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-extraction</text>
+
+            <rect x="420" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
+            <text x="510" y="226" text-anchor="middle" font-weight="700">reviewer</text>
+            <text x="510" y="244" text-anchor="middle" fill="#97a3c4">run_standard_review</text>
+            <text x="510" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-review</text>
+
+            <rect x="620" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
+            <text x="710" y="226" text-anchor="middle" font-weight="700">research</text>
+            <text x="710" y="244" text-anchor="middle" fill="#97a3c4">参考资料梳理</text>
+            <text x="710" y="262" text-anchor="middle" fill="#97a3c4">仅基于现有材料</text>
+
+            <rect x="820" y="200" width="180" height="76" rx="12" fill="url(#gSub)" stroke="#2a3563"/>
+            <text x="910" y="226" text-anchor="middle" font-weight="700">writer</text>
+            <text x="910" y="244" text-anchor="middle" fill="#97a3c4">write_file 写草稿</text>
+            <text x="910" y="262" text-anchor="middle" fill="#97a3c4">/skills/standard-drafting</text>
+          </g>
+
+          <g font-size="12" fill="#e6ecff">
+            <rect x="60"  y="370" width="280" height="170" rx="12" fill="url(#gTool)" stroke="#2a3563"/>
+            <text x="200" y="394" text-anchor="middle" font-weight="700" fill="#c8d6ff">FilesystemBackend · /workspace/</text>
+            <text x="80" y="418" fill="#97a3c4">root = WORKSPACE_ROOT</text>
+            <text x="80" y="436" fill="#97a3c4">· /workspace/input/uploads/{thread_id}/</text>
+            <text x="80" y="454" fill="#97a3c4">· /workspace/output/mineru|metadata|reports|drafts</text>
+            <text x="80" y="472" fill="#97a3c4">· /workspace/templates · /workspace/tmp</text>
+            <text x="80" y="500" fill="#2dd4bf" font-size="11">本机开启；部署默认关闭</text>
+            <text x="80" y="518" fill="#2dd4bf" font-size="11">可通过 STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1 打开</text>
+
+            <rect x="400" y="370" width="280" height="170" rx="12" fill="url(#gTool)" stroke="#2a3563"/>
+            <text x="540" y="394" text-anchor="middle" font-weight="700" fill="#c8d6ff">StoreBackend · /memories/</text>
+            <text x="420" y="418" fill="#97a3c4">namespace = (assistant_id, user_id)</text>
+            <text x="420" y="436" fill="#97a3c4">· AGENTS.md · preferences.md</text>
+            <text x="420" y="454" fill="#97a3c4">· project-notes.md (seed)</text>
+            <text x="420" y="486" fill="#f59e0b" font-size="11">只读；变更走 propose_memory_update + HITL</text>
+            <text x="420" y="504" fill="#f59e0b" font-size="11">运行时写回 Store，部署侧 Postgres</text>
+            <text x="420" y="522" fill="#97a3c4">local: InMemoryStore · server: 平台托管</text>
+
+            <rect x="740" y="370" width="280" height="170" rx="12" fill="url(#gTool)" stroke="#2a3563"/>
+            <text x="880" y="394" text-anchor="middle" font-weight="700" fill="#c8d6ff">FilesystemBackend · /skills/</text>
+            <text x="760" y="418" fill="#97a3c4">root = SKILLS_DIR (项目 skills/)</text>
+            <text x="760" y="436" fill="#97a3c4">· standard-parsing · standard-extraction</text>
+            <text x="760" y="454" fill="#97a3c4">· standard-review · standard-drafting</text>
+            <text x="760" y="486" fill="#f43f5e" font-size="11">权限：read=allow / write=deny</text>
+            <text x="760" y="504" fill="#97a3c4">virtual_mode=True</text>
+            <text x="760" y="522" fill="#97a3c4">默认走本地；部署可切到 StoreBackend</text>
+          </g>
+
+          <g stroke="#97a3c4" fill="none" stroke-width="1.5">
+            <line x1="180" y1="70"  x2="260"  y2="70"  marker-end="url(#arr)"/>
+            <line x1="390" y1="130" x2="110"  y2="200" marker-end="url(#arr)"/>
+            <line x1="390" y1="130" x2="310"  y2="200" marker-end="url(#arr)"/>
+            <line x1="390" y1="130" x2="510"  y2="200" marker-end="url(#arr)"/>
+            <line x1="390" y1="130" x2="710"  y2="200" marker-end="url(#arr)"/>
+            <line x1="390" y1="130" x2="910"  y2="200" marker-end="url(#arr)"/>
+            <line x1="200" y1="540" x2="540"  y2="600" marker-end="url(#arr)"/>
+            <line x1="540" y1="540" x2="540"  y2="600" marker-end="url(#arr)"/>
+            <line x1="880" y1="540" x2="540"  y2="600" marker-end="url(#arr)"/>
+          </g>
+          <text x="540" y="612" text-anchor="middle" fill="#c8d6ff" font-size="13">CompositeBackend · default = StateBackend (短期 scratch)</text>
+        </svg>
+      </div>
+    </section>
+
+    <section id="entry">
+      <h2>5. 入口与 langgraph.json</h2>
+      <p>LangGraph Server 通过 <a href="file:///d:/deep-agents/langgraph.json"><code class="inline">langgraph.json</code></a>
+        把项目入口挂为图节点：</p>
+      <pre class="file-ref">d:\deep-agents\langgraph.json</pre>
+      <pre class="language-json"><code class="language-json">{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./agent.py:agent",
+    "metadata_extraction": "./metadata_extraction_graph.py:metadata_extraction",
+    "standard_review": "./standard_review_graph.py:standard_review"
+  },
+  "env": ".env",
+  "python_version": "3.12"
+}</code></pre>
+      <p>对应 <a href="file:///d:/deep-agents/agent.py"><code class="inline">agent.py</code></a>（LangGraph Server 入口，仅 5 行）：</p>
+      <pre class="file-ref">d:\deep-agents\agent.py</pre>
+      <pre class="language-python"><code class="language-python">"""LangGraph Server entrypoint for langgraph dev and LangSmith Deployment."""
+from standard_document_assistant.agent import build_standard_document_agent
+
+# LangGraph loads this compiled graph by ID from langgraph.json.
+agent = build_standard_document_agent(strict_model=True, langgraph_server=True)</code></pre>
+      <p class="muted small">本地 CLI / 测试走 <code class="inline">cli.py</code>；部署走 LangGraph Server / LangSmith Deployment，都复用同一个工厂。</p>
+    </section>
+
+    <section id="main-agent">
+      <h2>6. 主 Agent 工厂 <code class="inline">build_standard_document_agent</code></h2>
+      <p>主 Agent 的所有配置都集中在
+        <a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py"><code class="inline">agent.py</code></a>。</p>
+
+      <h3>6.1 持久化与模型初始化</h3>
+      <div class="file-ref">d:\deep-agents\src\standard_document_assistant\agent.py · <span class="ln">L107-L143</span></div>
+      <pre class="language-python"><code class="language-python">def build_standard_document_agent(*, strict_model: bool = False, langgraph_server: bool = False):
+    from deepagents import create_deep_agent  # 框架入口
+    ensure_project_directories()              # 创建 workspace/、memories/、skills/ 子目录
+    config = load_config()                     # 读 config.yaml + .env
+    model = build_qwen_model(config.primary_model, strict=strict_model)
+
+    # 持久化：本地 MemorySaver + InMemoryStore；部署态由平台注入
+    store = None
+    checkpointer = None
+    if not langgraph_server:
+        from langgraph.checkpoint.memory import MemorySaver
+        from langgraph.store.memory import InMemoryStore
+        store = InMemoryStore()
+        seed_memory_store(store)               # 把 memories/*.md 注入 Store
+        checkpointer = MemorySaver()</code></pre>
+
+      <h3>6.2 create_deep_agent 关键 kwargs</h3>
+      <div class="file-ref">d:\deep-agents\src\standard_document_assistant\agent.py · <span class="ln">L144-L177</span></div>
+      <pre class="language-python"><code class="language-python">    agent_kwargs: dict[str, Any] = {
+        "name": AGENT_NAME,                                              # "standard-document-assistant"
+        "model": model,                                                  # ChatQwen(qwen3.7-plus)
+        "system_prompt": MAIN_SYSTEM_PROMPT,                             # 主编排规则
+        "tools": STANDARD_DOCUMENT_TOOLS,                                # 主 Agent 直调工具
+        "memory": ["/memories/AGENTS.md", "/memories/preferences.md"],   # 启动注入
+        "skills": ["/skills/"],                                          # 虚拟路径
+        "subagents": build_subagents(langgraph_server=langgraph_server),
+        "backend": build_backend(langgraph_server=langgraph_server, store=store),
+        "permissions": build_permissions(),                               # 路径级 read/write
+        "response_format": AgentResult,                                  # Pydantic 结构化输出
+    }
+    if hitl_enabled(langgraph_server=langgraph_server):
+        # 主 Agent 层只覆盖"主 Agent 自身直调"的工具；
+        # subagent 内的工具由 build_subagents 内部声明。
+        agent_kwargs["interrupt_on"] = {
+            "write_file":            {"allowed_decisions": ["approve", "edit"]},
+            "edit_file":             {"allowed_decisions": ["approve", "edit"]},
+            "propose_memory_update": {"allowed_decisions": ["approve", "edit"]},
+            "execute":               {"allowed_decisions": ["approve", "edit"]},
+        }
+    if checkpointer is not None: agent_kwargs["checkpointer"] = checkpointer
+    if store is not None:         agent_kwargs["store"] = store
+
+    return create_deep_agent(**agent_kwargs)</code></pre>
+
+      <h3>6.3 关键设计点</h3>
+      <ul>
+        <li><strong>本地 / 部署双模式</strong>：<code class="inline">langgraph_server</code> 开关决定是否让平台托管 checkpointer / store。</li>
+        <li><strong>结构化输出</strong>：<code class="inline">response_format=AgentResult</code>（<a href="file:///d:/deep-agents/src/standard_document_assistant/schemas.py">schemas.py</a>）。</li>
+        <li><strong>Skills 注入</strong>：<code class="inline">skills=["/skills/"]</code> 必须使用虚拟路径，Deep Agents 运行时按 frontmatter 描述按需加载。</li>
+        <li><strong>HITL 分层</strong>：主 Agent 层只覆盖"主 Agent 自身直调"的工具；subagent 内的工具由 <code class="inline">build_subagents</code> 内部单独声明。</li>
+      </ul>
+    </section>
+
+    <section id="system-prompt">
+      <h2>7. 系统提示词 <a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py"><code class="inline">prompts.py</code></a></h2>
+      <p><code class="inline">prompts.py</code> 集中维护 6 套系统提示词，对应主 Agent + 5 个 SubAgent：</p>
+      <table>
+        <thead><tr><th>常量</th><th>作用对象</th><th>职责</th><th>对应 SubAgent</th></tr></thead>
+        <tbody>
+          <tr><td><code class="inline">MAIN_SYSTEM_PROMPT</code></td><td>主 Agent</td><td>意图识别 / <code class="inline">write_todos</code> / 委派 SubAgent / HITL 提示</td><td>—</td></tr>
+          <tr><td><code class="inline">PARSER_PROMPT</code></td><td>parser</td><td>只调 <code class="inline">parse_file_with_mineru</code>，不抽元数据不审核</td><td>parser</td></tr>
+          <tr><td><code class="inline">EXTRACTOR_PROMPT</code></td><td>extractor</td><td>只调 <code class="inline">extract_standard_metadata</code>，不读 JSON / 全文</td><td>extractor</td></tr>
+          <tr><td><code class="inline">REVIEWER_PROMPT</code></td><td>reviewer</td><td>只调 <code class="inline">run_standard_review</code>，回报四个产物路径 + scope/audit 摘要</td><td>reviewer</td></tr>
+          <tr><td><code class="inline">WRITER_PROMPT</code></td><td>writer</td><td>使用 <code class="inline">standard-drafting</code> skill，先澄清需求再起草</td><td>writer</td></tr>
+          <tr><td><code class="inline">RESEARCH_PROMPT</code></td><td>research</td><td>仅基于现有材料，不访问外部服务</td><td>research</td></tr>
+        </tbody>
+      </table>
+
+      <details class="acc">
+        <summary>主 Agent 提示词节选 <code class="inline">MAIN_SYSTEM_PROMPT</code></summary>
+        <div class="body">
+<pre class="language-text"><code class="language-text">你是标准文档助手的主编排智能体。
+职责：
+1. 理解用户意图，识别任务类型：PDF 解析、元数据抽取、文档审核、文档生成、参考材料梳理或混合任务。
+2. 复杂任务必须先调用 write_todos 生成可追踪计划。
+3. 用户上传文件应位于 /workspace/input/uploads/{thread_id}/；业务工具只接收 /workspace/ 虚拟路径。
+4. PDF 或 Word 标准文档优先委派 parser 调用 parse_file_with_mineru。
+5. 元数据抽取链路是"必要时解析 -&gt; extract_standard_metadata -&gt; JSON 和 manifest"。
+...
+9. 用户提交 PDF 或 Word 并要求元数据抽取时：先用 task 委派 parser 调用 parse_file_with_mineru，
+   取得 virtual_md_path、cover_metadata、virtual_manifest_path；再委派 extractor 调用
+   extract_standard_metadata(file_path=virtual_md_path, cover_metadata_hint=cover_metadata)。
+10. 简单单文件元数据抽取：输入已是 Markdown 或 /workspace/output/mineru/**/*.md 时，
+    不要 read_file 全文、不要读取 extraction skill、不要 write_todos，直接 task 委派 extractor。</code></pre>
+        </div>
+      </details>
+    </section>
+
+    <section id="config-model">
+      <h2>8. 模型与配置 <a href="file:///d:/deep-agents/src/standard_document_assistant/config.py"><code class="inline">config.py</code></a></h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>主模型 <a href="file:///d:/deep-agents/config.yaml">config.yaml</a></h3>
+          <pre class="language-yaml"><code class="language-yaml">models:
+  primary:
+    provider: qwen
+    class: langchain_qwq.ChatQwen
+    model: qwen3.7-plus
+    temperature: 0
+    max_tokens: 8000
+    timeout: 60
+    max_retries: 2</code></pre>
+          <p class="small muted">在 <a href="file:///d:/deep-agents/src/standard_document_assistant/config.py">config.py</a> 由 <code class="inline">build_qwen_model</code> 实例化为 <code class="inline">ChatQwen</code>。</p>
+        </div>
+        <div class="card">
+          <h3>子图 / 子工具专用模型</h3>
+          <ul>
+            <li><strong>元数据抽取</strong>：<code class="inline">qwen3.7-plus</code>（langextract）</li>
+            <li><strong>LLM Judge</strong>：<code class="inline">qwen3.7-plus</code>（审核）</li>
+            <li><strong>审核摘要</strong>：<code class="inline">qwen3.7-plus</code>（audit_summary）</li>
+            <li><strong>嵌入</strong>：<code class="inline">text-embedding-v3</code>，<code class="inline">embedding_dim=1024</code></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="subagents">
+      <h2>9. 5 个 SubAgent 总览</h2>
+      <p>SubAgent 由 <a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py"><code class="inline">agent.py:build_subagents</code></a>
+        构造（<span class="ln">L68-L105</span>），传入 <code class="inline">create_deep_agent(..., subagents=...)</code>。</p>
+
+      <div class="search">
+        <input type="text" id="subagentFilter" placeholder="过滤 SubAgent（parser / extractor / reviewer / writer / research）..." />
+        <span class="count" id="subagentCount"></span>
+      </div>
+
+      <div class="grid cols-3" id="subagentGrid">
+        <div class="card" data-key="parser">
+          <h3><span class="pill accent">parser</span></h3>
+          <p class="meta">PDF/Word → Markdown + manifest + cover_metadata</p>
+          <ul>
+            <li>系统提示：<a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">PARSER_PROMPT</a></li>
+            <li>绑定 Skill：<code class="inline">/skills/standard-parsing</code></li>
+            <li>核心工具：<code class="inline">parse_file_with_mineru</code></li>
+            <li>HITL：<code class="inline">parse_file_with_mineru</code> → approve / edit</li>
+            <li>AGENTS.md：<a href="file:///d:/deep-agents/subagents/parser/AGENTS.md">subagents/parser/AGENTS.md</a></li>
+          </ul>
+        </div>
+        <div class="card" data-key="extractor">
+          <h3><span class="pill accent">extractor</span></h3>
+          <p class="meta">Markdown → 国标 19 个元数据 JSON</p>
+          <ul>
+            <li>系统提示：<a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">EXTRACTOR_PROMPT</a></li>
+            <li>绑定 Skill：<code class="inline">/skills/standard-extraction</code></li>
+            <li>核心工具：<code class="inline">extract_standard_metadata</code>、<code class="inline">validate_output_schema</code></li>
+            <li>HITL：<code class="inline">extract_standard_metadata</code> → approve / edit</li>
+            <li>AGENTS.md：<a href="file:///d:/deep-agents/subagents/extractor/AGENTS.md">subagents/extractor/AGENTS.md</a></li>
+          </ul>
+        </div>
+        <div class="card" data-key="reviewer">
+          <h3><span class="pill accent">reviewer</span></h3>
+          <p class="meta">内容轨 + 格式轨 + scope_summary + audit_summary</p>
+          <ul>
+            <li>系统提示：<a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">REVIEWER_PROMPT</a></li>
+            <li>绑定 Skill：<code class="inline">/skills/standard-review</code></li>
+            <li>核心工具：<code class="inline">parse_file_with_mineru</code>、<code class="inline">run_standard_review</code>、<code class="inline">run_format_source_review</code>、<code class="inline">inspect_review_rules</code>、<code class="inline">build_review_index</code>、<code class="inline">validate_review_result_schema</code></li>
+            <li>HITL：parse / run_standard_review / run_format_source_review / build_review_index → approve / edit</li>
+            <li>AGENTS.md：<a href="file:///d:/deep-agents/subagents/reviewer/AGENTS.md">subagents/reviewer/AGENTS.md</a></li>
+          </ul>
+        </div>
+        <div class="card" data-key="research">
+          <h3><span class="pill indigo">research</span></h3>
+          <p class="meta">参考资料梳理（仅基于现有材料）</p>
+          <ul>
+            <li>系统提示：<a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">RESEARCH_PROMPT</a></li>
+            <li>绑定 Skill：—（无）</li>
+            <li>核心工具：内置文件工具</li>
+            <li>HITL：受主 Agent 层 <code class="inline">write_file/edit_file</code> 覆盖</li>
+            <li>AGENTS.md：<a href="file:///d:/deep-agents/subagents/research/AGENTS.md">subagents/research/AGENTS.md</a></li>
+          </ul>
+        </div>
+        <div class="card" data-key="writer">
+          <h3><span class="pill indigo">writer</span></h3>
+          <p class="meta">标准文档 Markdown 草稿</p>
+          <ul>
+            <li>系统提示：<a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">WRITER_PROMPT</a></li>
+            <li>绑定 Skill：<code class="inline">/skills/standard-drafting</code></li>
+            <li>核心工具：<code class="inline">validate_output_schema</code> + 内置 <code class="inline">write_file</code></li>
+            <li>HITL：受主 Agent 层 <code class="inline">write_file</code> 覆盖</li>
+            <li>AGENTS.md：<a href="file:///d:/deep-agents/subagents/writer/AGENTS.md">subagents/writer/AGENTS.md</a></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>通用规则</h3>
+          <ul>
+            <li>SubAgent 是<strong>无状态</strong>的：每次 <code class="inline">task(...)</code> 都从干净上下文启动；指令需一次给完整。</li>
+            <li>SubAgent <strong>不继承主 Agent 的 Skill</strong>，必须在 spec 内显式声明 <code class="inline">skills=[...]</code>。</li>
+            <li>SubAgent 仍可调用 Deep Agents 内置工具（<code class="inline">write_todos</code>、<code class="inline">ls/read_file/write_file</code>），由框架自动注入。</li>
+            <li>HITL <code class="inline">interrupt_on</code> 可在 SubAgent 层独立声明，避免与主 Agent 重复。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>SubAgent 在哪里被调用？</h3>
+      <p>主 Agent 在 LangGraph 内部会<strong>自动</strong>获得 <code class="inline">task(agent="&lt;name&gt;", instruction="...")</code> 工具。
+        主 Agent 通过该工具委派任务。典型 prompt 节选（来自 <a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py">prompts.py</a>）：</p>
+      <pre class="language-text"><code class="language-text">9. 用户提交 PDF 或 Word 并要求元数据抽取时：
+   先用 task 委派 parser 调用 parse_file_with_mineru，
+   取得 virtual_md_path、cover_metadata、virtual_manifest_path；
+   再委派 extractor 调用 extract_standard_metadata(...)。</code></pre>
+    </section>
+
+    <section id="customize-subagent">
+      <h2>10. 如何自定义 SubAgent</h2>
+      <p>本项目在 <a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py"><code class="inline">agent.py:build_subagents</code></a> 中以
+        <code class="inline">dict</code> 形式注册 SubAgent。要新增一个 SubAgent，<strong>只需</strong>三步：</p>
+
+      <h3>步骤 1：在 <code class="inline">build_subagents()</code> 内追加 spec</h3>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\agent.py · <span class="ln">build_subagents()</span></pre>
+      <pre class="language-python"><code class="language-python">return [
+    parser_spec, extractor_spec, reviewer_spec,
+    research_spec, writer_spec,
+    # 👇 新增 SubAgent
+    {
+        "name": "translator",
+        "description": "将中文标准草稿翻译为英文 Markdown，供双语发布。",
+        "system_prompt": TRANSLATOR_PROMPT,
+        "tools": [validate_output_schema],   # 用 LangChain @tool / StructuredTool
+        "skills": ["/skills/standard-translation"],
+    },
+]</code></pre>
+
+      <h3>步骤 2：在 <a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py"><code class="inline">prompts.py</code></a> 写 system prompt</h3>
+      <pre class="language-python"><code class="language-python">TRANSLATOR_PROMPT = """你是标准文档翻译子代理。
+输入：/workspace/output/drafts/*.md 中文草稿。
+输出：写入 /workspace/output/drafts/*.en.md，仅返回路径与摘要。
+"""</code></pre>
+
+      <h3>步骤 3（可选）：在 <code class="inline">subagents/translator/AGENTS.md</code> 落一份 managed 兼容副本</h3>
+      <pre class="file-ref">d:\deep-agents\subagents\translator\AGENTS.md</pre>
+      <pre class="language-markdown"><code class="language-markdown">---
+name: translator
+description: 将中文标准草稿翻译为英文 Markdown。
+---
+
+你是标准文档翻译子代理。输入是 /workspace/output/drafts/*.md，
+输出是同目录 *.en.md。不得自行改写条款编号。</code></pre>
+
+      <h3>步骤 4：在 <a href="file:///d:/deep-agents/src/standard_document_assistant/prompts.py"><code class="inline">prompts.py:MAIN_SYSTEM_PROMPT</code></a> 加委派规则</h3>
+      <pre class="language-text"><code class="language-text">16. 用户要求中英双语发布时，task 委派 translator 调用 write_file
+    写入 /workspace/output/drafts/&lt;stem&gt;.en.md。</code></pre>
+
+      <div class="legend">
+        <span><i style="background:rgba(91,140,255,0.5)"></i>说明：SubAgent name 必须唯一，会成为 task 工具的可选值。</span>
+      </div>
+    </section>
+
+    <section id="skills">
+      <h2>11. 4 个 Skill 总览</h2>
+      <p>技能是 Deep Agents “按需加载”的领域知识目录。本项目 4 个 skill 均放在
+        <a href="file:///d:/deep-agents/skills/standard-parsing/SKILL.md"><code class="inline">skills/&lt;name&gt;/SKILL.md</code></a>，
+        通过 <code class="inline">FilesystemBackend(virtual_mode=True)</code> 暴露为 <code class="inline">/skills/</code> 虚拟路径。</p>
+
+      <div class="search">
+        <input type="text" id="skillFilter" placeholder="过滤 Skill（parsing / extraction / review / drafting）..." />
+        <span class="count" id="skillCount"></span>
+      </div>
+
+      <div class="grid cols-4" id="skillGrid">
+        <div class="card" data-key="parsing">
+          <h3><span class="pill accent">standard-parsing</span></h3>
+          <p class="meta">parser subagent</p>
+          <ul>
+            <li><a href="file:///d:/deep-agents/skills/standard-parsing/SKILL.md">SKILL.md</a></li>
+            <li>references/mineru-output-layout.md</li>
+            <li>references/mineru-failures.md</li>
+            <li>references/pdf-parse-workflow.md</li>
+          </ul>
+        </div>
+        <div class="card" data-key="extraction">
+          <h3><span class="pill accent">standard-extraction</span></h3>
+          <p class="meta">extractor subagent</p>
+          <ul>
+            <li><a href="file:///d:/deep-agents/skills/standard-extraction/SKILL.md">SKILL.md</a></li>
+            <li>references/metadata-fields.md</li>
+            <li>references/metadata-normalization.md</li>
+            <li>references/quality-checklist.md</li>
+          </ul>
+        </div>
+        <div class="card" data-key="review">
+          <h3><span class="pill accent">standard-review</span></h3>
+          <p class="meta">reviewer subagent</p>
+          <ul>
+            <li><a href="file:///d:/deep-agents/skills/standard-review/SKILL.md">SKILL.md</a></li>
+            <li>（内联子图流程、Tool Set、Artifact Layout、Knowledge Base）</li>
+          </ul>
+        </div>
+        <div class="card" data-key="drafting">
+          <h3><span class="pill accent">standard-drafting</span></h3>
+          <p class="meta">writer subagent</p>
+          <ul>
+            <li><a href="file:///d:/deep-agents/skills/standard-drafting/SKILL.md">SKILL.md</a></li>
+            <li>（起草流程规约）</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>SKILL.md 共同结构（frontmatter + 正文）</h3>
+      <p>节选自 <a href="file:///d:/deep-agents/skills/standard-parsing/SKILL.md">standard-parsing/SKILL.md</a>：</p>
+      <pre class="file-ref">d:\deep-agents\skills\standard-parsing\SKILL.md</pre>
+      <pre class="language-markdown"><code class="language-markdown">---
+name: standard-parsing
+description: |
+  仅在输入是 /workspace/input/uploads/** 或 /workspace/input/samples/**
+  下后缀为 .pdf 或 .docx 的标准文档时使用；调用 parse_file_with_mineru
+  还原版式、抽取封面元信息并落盘到 /workspace/output/mineru。
+  已有 Markdown / content_list 时不要再次解析。
+---
+
+# Standard Parsing
+## 何时使用 / MinerU 调用模式 / 工作流 / cover_metadata 字段 / 产物 / 失败处理
+...</code></pre>
+
+      <h3>Skill 在哪里被调用？</h3>
+      <ol>
+        <li>主 Agent 启动时 <code class="inline">create_deep_agent(skills=["/skills/"])</code>，Deep Agents 框架读取每个 SKILL.md 的 frontmatter，<strong>只把 name+description</strong> 注入 system prompt。</li>
+        <li>当 SubAgent 描述 / 用户请求匹配某 skill 的 <code class="inline">description</code>，Deep Agents 才会<strong>按需</strong>读取该 SKILL.md 正文。</li>
+        <li>SubAgent spec 内 <code class="inline">skills=["/skills/standard-parsing"]</code>（<a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py">agent.py</a>）
+          是 <strong>绑定关系</strong>：告诉主 Agent "这个 SubAgent 适用哪个 skill"，避免主 Agent 把 skill 描述混进自己 prompt。</li>
+      </ol>
+    </section>
+
+    <section id="customize-skill">
+      <h2>12. 如何自定义 Skill</h2>
+      <p>Skill 目录结构遵循 <a href="https://docs.langchain.com/oss/python/deepagents/skills">Deep Agents Skills</a> 规范：</p>
+      <pre class="file-ref">skills/&lt;skill-name&gt;/SKILL.md + 可选 references/</pre>
+      <p>三步新增一个 Skill：</p>
+      <ol>
+        <li>新建目录：<code class="inline">skills/standard-translation/</code></li>
+        <li>写 <code class="inline">SKILL.md</code>（<strong>frontmatter 必填</strong> name + description）</li>
+        <li>在 <a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py"><code class="inline">agent.py:build_subagents</code></a>
+          把 <code class="inline">"/skills/standard-translation"</code> 加到目标 SubAgent 的 <code class="inline">skills=[...]</code> 列表</li>
+      </ol>
+
+      <h3>模板</h3>
+      <pre class="language-markdown"><code class="language-markdown">---
+name: standard-translation
+description: |
+  将 /workspace/output/drafts/*.md 中文标准草稿翻译为英文 Markdown。
+  触发条件：用户输入"中英双语" / "英文版" / "translate to English"。
+  强约束：保留条款编号、不得编造引文、不得替换专有标准名。
+---
+
+# Standard Translation
+
+## 何时使用
+1. 用户要求把已生成的 .md 草稿翻译成英文。
+2. 已经存在 /workspace/output/drafts/&lt;stem&gt;.md。
+
+## Instructions
+1. 调用 write_file 写入 /workspace/output/drafts/&lt;stem&gt;.en.md。
+2. 不得修改条款编号。
+3. 不确定术语保留原文 + 译文括注。
+
+## 失败处理
+- 缺原文：先 task 委派 writer 生成中文草稿。</code></pre>
+
+      <h3>常见错误</h3>
+      <ul>
+        <li>frontmatter 缺 <code class="inline">name</code> 或 <code class="inline">description</code>：Deep Agents 无法发现该 skill。</li>
+        <li>description 过于笼统（如“帮助用户”）：主 Agent 难以判断何时加载；应<strong>具体描述触发条件</strong>。</li>
+        <li>把大文件直接塞进 <code class="inline">SKILL.md</code> 正文：应放 <code class="inline">references/</code>，由 Agent 按需读取。</li>
+      </ul>
+    </section>
+
+    <section id="tools">
+      <h2>13. 9 个业务工具</h2>
+      <p>工具通过 <code class="inline">StructuredTool.from_function(func=..., coroutine=..., args_schema=...)</code> 同时暴露同步/异步；<strong>无</strong> <code class="inline">runtime</code> 字段进 args_schema，由
+        <a href="https://docs.langchain.com/oss/python/langchain/tools#injected-tool-arguments">InjectedToolArg</a> 注入。</p>
+
+      <div class="search">
+        <input type="text" id="toolFilter" placeholder="过滤工具..." />
+        <span class="count" id="toolCount"></span>
+      </div>
+
+      <table id="toolTable">
+        <thead>
+          <tr><th>工具</th><th>来源</th><th>用途</th><th>暴露给</th><th>HITL</th></tr>
+        </thead>
+        <tbody>
+          <tr data-key="parse">
+            <td><code class="inline">parse_file_with_mineru</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/parser.py">tools/parser.py</a></td>
+            <td>MinerU 解析 PDF/Word → Markdown / manifest / cover_metadata</td>
+            <td>parser / reviewer</td>
+            <td><span class="pill amber">approve/edit</span></td>
+          </tr>
+          <tr data-key="extract">
+            <td><code class="inline">extract_standard_metadata</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/metadata.py">tools/metadata.py</a></td>
+            <td>驱动 metadata_extraction 子图（langextract）抽取 19 个国标字段</td>
+            <td>extractor</td>
+            <td><span class="pill amber">approve/edit</span></td>
+          </tr>
+          <tr data-key="validate-output">
+            <td><code class="inline">validate_output_schema</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/validation.py">tools/validation.py</a></td>
+            <td>校验 AgentResult / ArtifactManifest / MetadataExtractionResult / ReviewIssue 等 schema</td>
+            <td>主 Agent + writer + extractor</td>
+            <td>—</td>
+          </tr>
+          <tr data-key="propose">
+            <td><code class="inline">propose_memory_update</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/validation.py">tools/validation.py</a></td>
+            <td>向 Store 写入<em>提案</em>，需 HITL 批准</td>
+            <td>主 Agent</td>
+            <td><span class="pill amber">approve/edit</span></td>
+          </tr>
+          <tr data-key="run-review">
+            <td><code class="inline">run_standard_review</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/review.py">tools/review.py</a></td>
+            <td>驱动 standard_review 子图做内容轨 + 格式轨审核</td>
+            <td>reviewer</td>
+            <td><span class="pill amber">approve/edit</span></td>
+          </tr>
+          <tr data-key="run-format">
+            <td><code class="inline">run_format_source_review</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/review.py">tools/review.py</a></td>
+            <td>仅执行格式轨审核（确定性检查）</td>
+            <td>reviewer</td>
+            <td><span class="pill amber">approve/edit</span></td>
+          </tr>
+          <tr data-key="inspect-rules">
+            <td><code class="inline">inspect_review_rules</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/review.py">tools/review.py</a></td>
+            <td>按 query 预览 FAISS 命中的审核规则</td>
+            <td>reviewer</td>
+            <td>—</td>
+          </tr>
+          <tr data-key="build-index">
+            <td><code class="inline">build_review_index</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/review.py">tools/review.py</a></td>
+            <td>重建 / 刷新 FAISS + TF-IDF 规则索引</td>
+            <td>reviewer</td>
+            <td><span class="pill amber">approve/edit</span></td>
+          </tr>
+          <tr data-key="validate-review">
+            <td><code class="inline">validate_review_result_schema</code></td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/tools/review.py">tools/review.py</a></td>
+            <td>校验 <code class="inline">*_audit_result.json</code> schema 与 <code class="inline">/workspace/</code> 路径前缀</td>
+            <td>reviewer</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>典型 args_schema + InjectedToolArg 模板（来自 <a href="file:///d:/deep-agents/src/standard_document_assistant/tools/parser.py">tools/parser.py</a>）</h3>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\tools\parser.py · <span class="ln">ParseFileWithMineruInput / _parse_file_with_mineru_sync</span></pre>
+      <pre class="language-python"><code class="language-python">class ParseFileWithMineruInput(BaseModel):
+    """args_schema for :func:`parse_file_with_mineru`. 业务字段全部以 Pydantic 形式声明；
+    runtime 由框架通过 InjectedToolArg 注入，不进入 args_schema，也不进 prompt。"""
+    file_path: str = Field(..., description="workspace 下 PDF/DOCX 虚拟路径...")
+    return_images: bool | None = None
+    save_zip_archive: bool | None = None
+    # ... 其它可选字段
+
+def _parse_file_with_mineru_sync(
+    file_path: str,
+    *,
+    return_images: bool | None = None,
+    save_zip_archive: bool | None = None,
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,  # 关键
+) -> dict[str, Any]:
+    writer = _get_stream_writer(runtime)  # 推流式进度
+    ...</code></pre>
+
+      <h3>Tool 在哪里被调用？</h3>
+      <p>Deep Agents 把 <code class="inline">tools=[...]</code> 中所有工具的 name/description 注入 system prompt，模型在 reasoning 时按需调用。
+        每个工具的 <code class="inline">args_schema</code> 同时被序列化进 prompt，确保模型知道入参结构。</p>
+    </section>
+
+    <section id="customize-tool">
+      <h2>14. 如何自定义 Tool</h2>
+      <p>本项目的工具都在 <a href="file:///d:/deep-agents/src/standard_document_assistant/tools/__init__.py"><code class="inline">tools/__init__.py</code></a>
+        集中注册。要新增一个工具，<strong>三步</strong>：</p>
+
+      <h3>步骤 1：写工具文件</h3>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\tools/translator.py</pre>
+      <pre class="language-python"><code class="language-python">"""Translate a draft to English."""
+from typing import Annotated, Any
+from langchain.tools import ToolRuntime
+from langchain_core.tools import InjectedToolArg, StructuredTool
+from pydantic import BaseModel, Field
+
+class TranslateDraftInput(BaseModel):
+    file_path: str = Field(..., description="/workspace/output/drafts/*.md 虚拟路径")
+    runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None  # 不入 schema
+
+def _translate_sync(file_path: str, *, runtime=None) -> dict[str, Any]:
+    from standard_document_assistant.pathing import virtual_to_host_path
+    src = virtual_to_host_path(file_path)
+    target = src.with_suffix(".en.md")
+    target.write_text(f"# English version of {src.stem}\n\n" + src.read_text(encoding="utf-8"),
+                      encoding="utf-8")
+    return {"virtual_path": f"/workspace/output/drafts/{target.name}", "host_path": str(target)}
+
+translate_draft = StructuredTool.from_function(
+    name="translate_draft",
+    description="Translate a Markdown draft to English. Input: /workspace/output/drafts/*.md.",
+    func=_translate_sync,
+    args_schema=TranslateDraftInput,
+)</code></pre>
+
+      <h3>步骤 2：在 <a href="file:///d:/deep-agents/src/standard_document_assistant/tools/__init__.py"><code class="inline">tools/__init__.py</code></a> 导出</h3>
+      <pre class="language-python"><code class="language-python">from standard_document_assistant.tools.translator import translate_draft
+# ...
+STANDARD_DOCUMENT_TOOLS = [validate_output_schema, propose_memory_update, translate_draft]</code></pre>
+
+      <h3>步骤 3：把它挂到目标 SubAgent</h3>
+      <pre class="language-python"><code class="language-python"># agent.py:build_subagents
+{
+    "name": "translator",
+    "tools": [translate_draft, validate_output_schema],
+    ...
+}</code></pre>
+
+      <h3>常见错误</h3>
+      <ul>
+        <li><strong>把 <code class="inline">runtime</code> 写进 args_schema</strong>：会触发
+          <code class="inline">PydanticInvalidForJsonSchema: core_schema.CallableSchema</code>；必须用 <code class="inline">InjectedToolArg</code> 标记。</li>
+        <li><strong>未捕获异常</strong>：工具失败时模型只看到 <code class="inline">ToolMessage</code> 中的栈跟踪；本项目统一包成
+          <code class="inline">{"status":"failed", "errors":[...]}</code> 字典，行为等价于 <code class="inline">handle_tool_errors=True</code>。</li>
+        <li><strong>大结果直接返回</strong>：超过 ~16k token 会污染主 Agent 上下文；本项目落盘后只返回 <code class="inline">virtual_path</code>。</li>
+      </ul>
+    </section>
+
+    <section id="backend">
+      <h2>15. Backend 与内存</h2>
+      <p>官方建议在多源存储场景下用 <a href="https://docs.langchain.com/oss/python/deepagents/backends#compositebackend-router">CompositeBackend</a>：
+        把不同虚拟路径前缀路由到不同后端实现。</p>
+
+      <h3>15.1 路由表（<a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py">agent.py:build_backend</a>）</h3>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\agent.py · <span class="ln">L68-L105</span></pre>
+      <pre class="language-python"><code class="language-python">CompositeBackend(
+    default=StateBackend(),                                       # 短期 scratch
     routes={
-        <span class="s">"/memories/"</span>:  <span class="v">StoreBackend</span>(namespace=...),           <span class="c"># 长期记忆，按 assistant+user 隔离</span>
-        <span class="s">"/skills/"</span>:    <span class="v">FilesystemBackend</span>(root=SKILLS_DIR, virtual_mode=<span class="k">True</span>),
-        <span class="s">"/workspace/"</span>: <span class="v">FilesystemBackend</span>(root=WORKSPACE_ROOT, virtual_mode=<span class="k">True</span>),  <span class="c"># 仅本机</span>
+        "/memories/":  StoreBackend(namespace=_memory_namespace_factory(...)),
+        "/skills/":    FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True),
+        "/workspace/": FilesystemBackend(root_dir=WORKSPACE_ROOT, virtual_mode=True),  # 本机才挂
     },
-)</pre>
-    <h3>三条铁律（来自 agent.py 注释）</h3>
-    <ul>
-      <li><code class="inline">/memories/</code> 是<strong>虚拟路径</strong>；本地 <code class="inline">memories/</code> 目录只用于
-        <code class="inline">seed_memory_store</code> 启动时初始化，运行时不会自动回写。</li>
-      <li><code class="inline">/workspace/</code> 仅在本地模式（<code class="inline">langgraph_server=False</code>）默认开启；
-        部署态默认关闭，必要时通过 <code class="inline">STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1</code> 打开。</li>
-      <li><code class="inline">StateBackend</code> 作为默认后端，提供 thread-scoped 短期 VFS，避免污染长期记忆与真实磁盘。</li>
-    </ul>
-  </section>
+)</code></pre>
 
-  <!-- 7. 权限矩阵 -->
-  <section id="permissions">
-    <h2>7. 路径级权限矩阵（FilesystemPermission）</h2>
-    <table>
-      <thead>
-        <tr><th>路径前缀</th><th>read</th><th>write</th><th>设计意图</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><code class="inline">/workspace/.env*</code>、含 <code class="inline">secret</code> 的文件</td>
-          <td><span class="pill rose">deny</span></td>
-          <td><span class="pill rose">deny</span></td>
-          <td>硬性安全屏障：绝不让 Agent 触达凭据。</td>
-        </tr>
-        <tr>
-          <td><code class="inline">/workspace/input/**</code>、<code class="inline">/workspace/templates/**</code></td>
-          <td><span class="pill green">allow</span></td>
-          <td><span class="pill rose">deny</span></td>
-          <td>用户原始文件、模板：<strong>不可被 Agent 覆盖</strong>。</td>
-        </tr>
-        <tr>
-          <td><code class="inline">/workspace/output/**</code>、<code class="inline">/workspace/tmp/**</code></td>
-          <td><span class="pill green">allow</span></td>
-          <td><span class="pill green">allow</span></td>
-          <td>产物 / 草稿 / 临时文件可读写。</td>
-        </tr>
-        <tr>
-          <td><code class="inline">/skills/**</code></td>
-          <td><span class="pill green">allow</span></td>
-          <td><span class="pill rose">deny</span></td>
-          <td>技能只读；防止 Agent 篡改 skill 定义。</td>
-        </tr>
-        <tr>
-          <td><code class="inline">/memories/**</code></td>
-          <td><span class="pill green">allow</span></td>
-          <td><span class="pill rose">deny</span></td>
-          <td>长期记忆只读；更新走 <code class="inline">propose_memory_update</code> + HITL。</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+      <h3>15.2 启动注入：seed_memory_store</h3>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\agent.py · <span class="ln">seed_memory_store</span></pre>
+      <pre class="language-python"><code class="language-python">def seed_memory_store(store: Any) -> None:
+    """Seed StoreBackend memory files from the repository's memories directory."""
+    from deepagents.backends.utils import create_file_data
+    for name in ["AGENTS.md", "preferences.md", "project-notes.md"]:
+        content = _read_memory_seed(name)
+        if content:
+            store.put(MEMORY_NAMESPACE, f"/memories/{name}", create_file_data(content))</code></pre>
 
-  <!-- 8. HITL -->
-  <section id="hitl">
-    <h2>8. HITL 审批策略（interrupt_on）</h2>
-    <p>
-      Deep Agents 官方 <a href="https://docs.langchain.com/oss/python/deepagents/human-in-the-loop">human-in-the-loop</a>
-      通过 <code class="inline">interrupt_on</code> 在敏感工具调用前中断图执行，由人工 approve / edit 后再继续。
-    </p>
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>主 Agent 层（build_standard_document_agent）</h3>
-        <pre class="block">{
-  <span class="s">"write_file"</span>:            [<span class="s">"approve"</span>, <span class="s">"edit"</span>],
-  <span class="s">"edit_file"</span>:             [<span class="s">"approve"</span>, <span class="s">"edit"</span>],
-  <span class="s">"propose_memory_update"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>],
-  <span class="s">"execute"</span>:               [<span class="s">"approve"</span>, <span class="s">"edit"</span>],
-}</pre>
+      <h3>15.3 三条铁律（来自 <code class="inline">agent.py</code> 注释）</h3>
+      <ul>
+        <li><code class="inline">/memories/</code> 是<strong>虚拟路径</strong>；本地 <code class="inline">memories/</code> 目录只用于
+          <code class="inline">seed_memory_store</code> 启动时初始化，运行时不会自动回写。</li>
+        <li><code class="inline">/workspace/</code> 仅在本地模式（<code class="inline">langgraph_server=False</code>）默认开启；
+          部署态默认关闭，必要时通过 <code class="inline">STANDARD_DOC_ENABLE_WORKSPACE_BACKEND=1</code> 打开。</li>
+        <li><code class="inline">StateBackend</code> 作为默认后端，提供 thread-scoped 短期 VFS，避免污染长期记忆与真实磁盘。</li>
+      </ul>
+    </section>
+
+    <section id="permissions">
+      <h2>16. 路径级权限矩阵（<code class="inline">FilesystemPermission</code>）</h2>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\agent.py · <span class="ln">build_permissions</span></pre>
+      <pre class="language-python"><code class="language-python">return [
+    FilesystemPermission(operations=["read","write"],
+        paths=["/workspace/.env*", "/workspace/**/.env*", "/workspace/**/*secret*"], mode="deny"),
+    FilesystemPermission(operations=["read"],
+        paths=["/workspace/input/**", "/workspace/templates/**"], mode="allow"),
+    FilesystemPermission(operations=["write"],
+        paths=["/workspace/input/**", "/workspace/templates/**"], mode="deny"),
+    FilesystemPermission(operations=["read","write"],
+        paths=["/workspace/output/**", "/workspace/tmp/**"], mode="allow"),
+    FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
+    FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny"),
+    FilesystemPermission(operations=["read"], paths=["/memories/**"], mode="allow"),
+    FilesystemPermission(operations=["write"], paths=["/memories/**"], mode="deny"),
+]</code></pre>
+
+      <table>
+        <thead><tr><th>路径前缀</th><th>read</th><th>write</th><th>设计意图</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code class="inline">/workspace/.env*</code>、含 <code class="inline">secret</code> 的文件</td>
+            <td><span class="pill rose">deny</span></td><td><span class="pill rose">deny</span></td>
+            <td>硬性安全屏障：绝不让 Agent 触达凭据。</td>
+          </tr>
+          <tr>
+            <td><code class="inline">/workspace/input/**</code>、<code class="inline">/workspace/templates/**</code></td>
+            <td><span class="pill green">allow</span></td><td><span class="pill rose">deny</span></td>
+            <td>用户原始文件、模板：<strong>不可被 Agent 覆盖</strong>。</td>
+          </tr>
+          <tr>
+            <td><code class="inline">/workspace/output/**</code>、<code class="inline">/workspace/tmp/**</code></td>
+            <td><span class="pill green">allow</span></td><td><span class="pill green">allow</span></td>
+            <td>产物 / 草稿 / 临时文件可读写。</td>
+          </tr>
+          <tr>
+            <td><code class="inline">/skills/**</code></td>
+            <td><span class="pill green">allow</span></td><td><span class="pill rose">deny</span></td>
+            <td>技能只读；防止 Agent 篡改 skill 定义。</td>
+          </tr>
+          <tr>
+            <td><code class="inline">/memories/**</code></td>
+            <td><span class="pill green">allow</span></td><td><span class="pill rose">deny</span></td>
+            <td>长期记忆只读；更新走 <code class="inline">propose_memory_update</code> + HITL。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="hitl">
+      <h2>17. HITL 审批策略（<code class="inline">interrupt_on</code>）</h2>
+      <p>Deep Agents 官方
+        <a href="https://docs.langchain.com/oss/python/deepagents/human-in-the-loop">human-in-the-loop</a>
+        通过 <code class="inline">interrupt_on</code> 在敏感工具调用前中断图执行，由人工 approve / edit 后再继续。</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>主 Agent 层（<code class="inline">build_standard_document_agent</code>）</h3>
+          <pre class="language-python"><code class="language-python">{
+  "write_file":            ["approve", "edit"],
+  "edit_file":             ["approve", "edit"],
+  "propose_memory_update": ["approve", "edit"],
+  "execute":               ["approve", "edit"],
+}</code></pre>
+        </div>
+        <div class="card">
+          <h3>SubAgent 层（<code class="inline">build_subagents</code>）</h3>
+          <pre class="language-python"><code class="language-python"># parser
+{ "parse_file_with_mineru": ["approve", "edit"] }
+
+# extractor
+{ "extract_standard_metadata": ["approve", "edit"] }
+
+# reviewer
+{ "parse_file_with_mineru":        [...],
+  "run_standard_review":         [...],
+  "run_format_source_review":   [...],
+  "build_review_index":          [...] }</code></pre>
+        </div>
       </div>
-      <div class="card">
-        <h3>SubAgent 层（build_subagents）</h3>
-        <pre class="block"><span class="c"># parser</span>
-{ <span class="s">"parse_file_with_mineru"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>] }
 
-<span class="c"># extractor</span>
-{ <span class="s">"extract_standard_metadata"</span>: [<span class="s">"approve"</span>, <span class="s">"edit"</span>] }
+      <h3>开关与环境变量</h3>
+      <ul>
+        <li><code class="inline">hitl_enabled(langgraph_server=...)</code> 同时支持
+          <code class="inline">STANDARD_DOC_ENABLE_HITL=1</code> 强制开启、
+          <code class="inline">STANDARD_DOC_DISABLE_HITL=1</code> 强制关闭。</li>
+        <li><code class="inline">langgraph dev</code> 默认关闭 HITL，避免在 Studio 子图 resume 时触发
+          <code class="inline">TypeError: string indices must be integers, not 'str'</code>。</li>
+        <li>"reject" 显式留空：仅在严格禁用某能力的策略下才纳入白名单。</li>
+      </ul>
+    </section>
 
-<span class="c"># reviewer</span>
-{ <span class="s">"parse_file_with_mineru"</span>:        [...],
-  <span class="s">"run_standard_review"</span>:         [...],
-  <span class="s">"run_format_source_review"</span>:   [...],
-  <span class="s">"build_review_index"</span>:          [...] }</pre>
+    <section id="subgraph">
+      <h2>18. 子图与 Runtime Context</h2>
+      <p>本项目把 <code class="inline">extract_standard_metadata</code> 和 <code class="inline">run_standard_review</code>
+        包装为 LangGraph 子图，由 Tool 层调用。子图使用
+        <a href="https://docs.langchain.com/oss/python/langgraph/graph-api#runtime-context">LangGraph Runtime context</a> 透传横切关注点，<strong>不污染 graph state</strong>。</p>
+
+      <h3>18.1 元数据抽取子图（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/metadata_extraction/graph.py">graphs/metadata_extraction/graph.py</a>）</h3>
+      <pre class="language-python"><code class="language-python">@lru_cache(maxsize=1)
+def get_metadata_extraction_graph():
+    builder = StateGraph(
+        MetadataExtractionState,
+        context_schema=MetadataExtractionContext,  # 关键：横切关注点
+    )
+    builder.add_node("load_markdown", load_markdown)
+    builder.add_node("slice_scope", slice_scope)
+    builder.add_node("run_langextract", run_langextract, retry_policy=_LANGEXTRACT_RETRY_POLICY)
+    builder.add_node("aggregate_fields", aggregate_fields)
+    builder.add_node("validate_schema", validate_schema)
+    builder.add_node("persist_output", persist_output)
+    builder.add_node("write_manifest", write_manifest)
+    # 线性拓扑：load_markdown → slice_scope → run_langextract → ... → END
+    return builder.compile(name=METADATA_EXTRACTION_GRAPH_NAME)</code></pre>
+
+      <h3>18.2 审核子图（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/graph.py">graphs/standard_review/graph.py</a>）</h3>
+      <pre class="language-python"><code class="language-python">"""
+ingest → retrieve_rules → judge_rules ─┐
+                                       │ (Command)
+                                  quality_gate ─┬─(widen)→ widen → reload → judge_rules (loop)
+                                                 └─(ok)   → format_review → aggregate → write_outputs → write_manifest → END
+"""
+def quality_gate(state, runtime=None) -> Command[Literal["widen_review_scope", "format_review"]]:
+    """Decide whether to widen the review scope and rerun the judge."""
+    if (not state.get("format_only")
+        and config.enable_llm_review
+        and partial_mode != "full_document"
+        and insufficient
+        and round_idx < max_rounds):
+        return Command(update=..., goto="widen_review_scope")
+    return Command(update=..., goto="format_review")</code></pre>
+
+      <h3>18.3 Tool → 子图 透传 <code class="inline">context</code>（<a href="file:///d:/deep-agents/src/standard_document_assistant/tracing.py">tracing.py</a>）</h3>
+      <pre class="language-python"><code class="language-python">def invoke_traced_graph(graph, state, *, parent_config, graph_name, tool_name,
+                        tool_call_id=None, extra_metadata=None, context=None):
+    config = build_subgraph_runnable_config(parent_config, graph_name=graph_name, ...)
+    if context is not None:
+        return graph.invoke(state, config=config, context=context)  # 关键
+    return graph.invoke(state, config=config)</code></pre>
+
+      <p class="muted small">checkpointer 不显式挂：依靠主图 <code class="inline">compile(checkpointer=MemorySaver())</code> 自动传播，命名空间由 thread_id 隔离。</p>
+    </section>
+
+    <section id="tracing">
+      <h2>19. Tracing / SSE</h2>
+      <p>本项目通过 <a href="file:///d:/deep-agents/src/standard_document_assistant/tracing.py"><code class="inline">tracing.py</code></a>
+        统一透传父 agent 的 callbacks / tags / metadata，子图以 <code class="inline">standard_review</code> /
+        <code class="inline">metadata_extraction</code> 节点呈现在 LangSmith 树中。</p>
+      <ul>
+        <li><strong>节点级 RetryPolicy</strong>：<code class="inline">judge_rules</code> / <code class="inline">aggregate</code> /
+          <code class="inline">run_langextract</code> 对 transient 错误重试，避免对 LLM 解析错误无意义重试。</li>
+        <li><strong>Tool 层流式事件</strong>：通过 <code class="inline">ToolRuntime.stream_writer</code> 推送
+          <code class="inline">mineru.* / meta.* / review.*</code> 命名空间事件，前端 <code class="inline">stream_mode="custom"</code> 消费。</li>
+        <li><strong>子图双通道 trace</strong>：<code class="inline">state["trace_events"]</code> 累加 + <code class="inline">get_stream_writer</code> 推送，二者通过同一节点函数发射。</li>
+      </ul>
+    </section>
+
+    <section id="bff">
+      <h2>20. FastAPI BFF（本地调试）</h2>
+      <p><a href="file:///d:/deep-agents/src/standard_document_assistant/api/app.py"><code class="inline">api/app.py</code></a>
+        是面向 LangGraph Server 的本地 BFF：</p>
+      <ul>
+        <li>文件上传 → <code class="inline">/workspace/input/uploads/{thread_id}/</code>，返回 <code class="inline">UploadedFileRecord</code>。</li>
+        <li>对话流式 → <code class="inline">POST /threads/&lt;id&gt;/runs/stream</code>，映射 LangGraph events → SSE 事件（<code class="inline">sse_adapter.py</code>）。</li>
+        <li>中断恢复 → <code class="inline">POST /threads/&lt;id&gt;/runs/&lt;run_id&gt;/resume</code> 接收 <code class="inline">Command(resume={"decisions": [...]})</code>。</li>
+        <li>产物下载 → <code class="inline">/artifacts/&lt;artifact_id&gt;</code>，<code class="inline">artifacts.py</code> 负责 host_path ↔ download_url 映射。</li>
+        <li>直连审核 → <code class="inline">POST /direct/review</code> 绕过主 Agent，直接驱动 <code class="inline">standard_review</code> 子图（用于测试 / 异步审核）。</li>
+      </ul>
+      <p class="muted small">BFF 不修改业务逻辑，所有编排都来自 <a href="file:///d:/deep-agents/src/standard_document_assistant/agent.py">agent.py</a>。</p>
+    </section>
+
+    <section id="flow">
+      <h2>21. 端到端执行流程</h2>
+
+      <h3>21.1 启动注入（<code class="inline">seed_memory_store</code>）</h3>
+      <div class="flow">
+        <div class="node">memories/AGENTS.md</div><span class="arrow">→</span>
+        <div class="node">create_file_data</div><span class="arrow">→</span>
+        <div class="node">store.put(NS, /memories/AGENTS.md)</div><span class="arrow">→</span>
+        <div class="node">InMemoryStore 持久化</div>
       </div>
-    </div>
-    <h3>开关与环境变量</h3>
-    <ul>
-      <li><code class="inline">hitl_enabled(langgraph_server=...)</code> 同时支持
-        <code class="inline">STANDARD_DOC_ENABLE_HITL=1</code> 强制开启、
-        <code class="inline">STANDARD_DOC_DISABLE_HITL=1</code> 强制关闭。</li>
-      <li><code class="inline">langgraph dev</code> 默认关闭 HITL，避免在 Studio 子图 resume 时触发
-        <code class="inline">TypeError</code>。</li>
-      <li>“reject” 显式留空：仅在严格禁用某能力的策略下才纳入白名单。</li>
-    </ul>
-  </section>
 
-  <!-- 9. 业务工具 -->
-  <section id="tools">
-    <h2>9. 业务工具清单（STANDARD_DOCUMENT_TOOLS）</h2>
-    <table>
-      <thead>
-        <tr><th>工具</th><th>来源</th><th>用途</th><th>暴露给</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><code class="inline">validate_output_schema</code></td><td>tools/validation.py</td><td>校验最终输出是否符合 AgentResult</td><td>主 Agent + writer</td></tr>
-        <tr><td><code class="inline">propose_memory_update</code></td><td>tools/validation.py</td><td>向 Store 写入 <em>提案</em>，需 HITL 批准</td><td>主 Agent</td></tr>
-        <tr><td><code class="inline">parse_file_with_mineru</code></td><td>tools/parser.py</td><td>调用 MinerU 解析 PDF/Word</td><td>parser / reviewer</td></tr>
-        <tr><td><code class="inline">extract_standard_metadata</code></td><td>tools/metadata.py</td><td>langextract 抽取国标元数据</td><td>extractor</td></tr>
-        <tr><td><code class="inline">run_standard_review</code></td><td>tools/review.py</td><td>驱动 standard_review 子图做内容审核</td><td>reviewer</td></tr>
-        <tr><td><code class="inline">run_format_source_review</code></td><td>tools/review.py</td><td>格式轨审核</td><td>reviewer</td></tr>
-        <tr><td><code class="inline">inspect_review_rules</code></td><td>tools/review.py</td><td>查看规则索引与命中证据</td><td>reviewer</td></tr>
-        <tr><td><code class="inline">build_review_index</code></td><td>tools/review.py</td><td>重建/刷新 FAISS 规则索引</td><td>reviewer</td></tr>
-        <tr><td><code class="inline">validate_review_result_schema</code></td><td>tools/review.py</td><td>校验审核结果 schema</td><td>reviewer</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- 10. Skills -->
-  <section id="skills">
-    <h2>10. Skills 体系</h2>
-    <p>Skills 是 Deep Agents “按需加载”的领域知识目录。本项目 4 个 skill 均放在
-      <code class="inline">/skills/</code> 虚拟路径下，<code class="inline">virtual_mode=True</code>。</p>
-    <div class="grid cols-4">
-      <div class="card">
-        <h3>standard-parsing</h3>
-        <p class="meta">parser subagent</p>
-        <ul>
-          <li>SKILL.md</li>
-          <li>references/mineru-output-layout.md</li>
-          <li>references/mineru-failures.md</li>
-          <li>references/pdf-parse-workflow.md</li>
-        </ul>
+      <h3>21.2 任务编排（元数据抽取典型链）</h3>
+      <div class="flow">
+        <div class="node">用户上传 PDF</div><span class="arrow">→</span>
+        <div class="node">主 Agent：write_todos</div><span class="arrow">→</span>
+        <div class="node">task(parser)</div><span class="arrow">→</span>
+        <div class="node">parse_file_with_mineru (HITL?)</div><span class="arrow">→</span>
+        <div class="node">virtual_md_path + cover_metadata</div><span class="arrow">→</span>
+        <div class="node">task(extractor)</div><span class="arrow">→</span>
+        <div class="node">extract_standard_metadata (HITL?)</div><span class="arrow">→</span>
+        <div class="node">metadata JSON + manifest</div><span class="arrow">→</span>
+        <div class="node">AgentResult（含 download / warnings）</div>
       </div>
-      <div class="card">
-        <h3>standard-extraction</h3>
-        <p class="meta">extractor subagent</p>
-        <ul>
-          <li>SKILL.md</li>
-          <li>references/metadata-fields.md</li>
-          <li>references/metadata-normalization.md</li>
-          <li>references/quality-checklist.md</li>
-        </ul>
+
+      <h3>21.3 文档审核链（reviewer 路径）</h3>
+      <div class="flow">
+        <div class="node">PDF/Word 输入</div><span class="arrow">→</span>
+        <div class="node">task(reviewer)</div><span class="arrow">→</span>
+        <div class="node">parse_file_with_mineru（必要时）</div><span class="arrow">→</span>
+        <div class="node">run_standard_review → standard_review 子图</div><span class="arrow">→</span>
+        <div class="node">run_format_source_review</div><span class="arrow">→</span>
+        <div class="node">report / result / trace / manifest</div><span class="arrow">→</span>
+        <div class="node">AgentResult（含问题摘要、风险、依据）</div>
       </div>
-      <div class="card">
-        <h3>standard-review</h3>
-        <p class="meta">reviewer subagent</p>
-        <ul>
-          <li>SKILL.md</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>standard-drafting</h3>
-        <p class="meta">writer subagent</p>
-        <ul>
-          <li>SKILL.md</li>
-        </ul>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 11. 端到端流程 -->
-  <section id="flow">
-    <h2>11. 端到端执行流程</h2>
-    <h3>11.1 启动注入（seed_memory_store）</h3>
-    <div class="flow">
-      <div class="node">memories/AGENTS.md</div>
-      <span class="arrow">→</span>
-      <div class="node">create_file_data</div>
-      <span class="arrow">→</span>
-      <div class="node">store.put(NS, /memories/AGENTS.md)</div>
-      <span class="arrow">→</span>
-      <div class="node">InMemoryStore 持久化</div>
-    </div>
-    <h3>11.2 任务编排（元数据抽取典型链）</h3>
-    <div class="flow">
-      <div class="node">用户上传 PDF</div>
-      <span class="arrow">→</span>
-      <div class="node">主 Agent：write_todos</div>
-      <span class="arrow">→</span>
-      <div class="node">task(parser)</div>
-      <span class="arrow">→</span>
-      <div class="node">parse_file_with_mineru (HITL?)</div>
-      <span class="arrow">→</span>
-      <div class="node">virtual_md_path + cover_metadata</div>
-      <span class="arrow">→</span>
-      <div class="node">task(extractor)</div>
-      <span class="arrow">→</span>
-      <div class="node">extract_standard_metadata (HITL?)</div>
-      <span class="arrow">→</span>
-      <div class="node">metadata JSON + manifest</div>
-      <span class="arrow">→</span>
-      <div class="node">AgentResult（含 download / warnings）</div>
-    </div>
-    <h3>11.3 文档审核链（reviewer 路径）</h3>
-    <div class="flow">
-      <div class="node">PDF/Word 输入</div>
-      <span class="arrow">→</span>
-      <div class="node">task(reviewer)</div>
-      <span class="arrow">→</span>
-      <div class="node">parse_file_with_mineru（必要时）</div>
-      <span class="arrow">→</span>
-      <div class="node">run_standard_review → standard_review 子图</div>
-      <span class="arrow">→</span>
-      <div class="node">run_format_source_review</div>
-      <span class="arrow">→</span>
-      <div class="node">report / result / trace / manifest</div>
-      <span class="arrow">→</span>
-      <div class="node">AgentResult（含问题摘要、风险、依据）</div>
-    </div>
-  </section>
+    <section id="alignment">
+      <h2>22. 与 Deep Agents 范式的对齐与差异</h2>
+      <table>
+        <thead><tr><th>Deep Agents 官方能力</th><th>本项目实现</th><th>对标准文档助手的价值</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>任务规划</td>
+            <td><code class="inline">MAIN_SYSTEM_PROMPT</code> 强制 <code class="inline">write_todos</code></td>
+            <td>把“解析 → 抽取 → 审核 → 报告”拆成可追踪步骤，避免遗漏链路</td>
+          </tr>
+          <tr>
+            <td>Filesystem (Backend)</td>
+            <td>CompositeBackend：<code class="inline">/memories/</code> + <code class="inline">/skills/</code> + <code class="inline">/workspace/</code> + StateBackend 默认</td>
+            <td>把临时 scratch、长期记忆、领域知识、业务文件分到不同后端，治理清晰</td>
+          </tr>
+          <tr>
+            <td>Subagents</td>
+            <td>5 个专业 SubAgent，每个挂专属 Skill、工具与 HITL 配置</td>
+            <td>在隔离上下文里执行大文本解析/审核/草稿生成，主 Agent 只看摘要</td>
+          </tr>
+          <tr>
+            <td>Memory</td>
+            <td>启动注入 AGENTS.md / preferences.md；运行时走 StoreBackend；更新走 <code class="inline">propose_memory_update</code></td>
+            <td>长期沉淀用户偏好与项目笔记，<strong>不可被 Agent 直写</strong></td>
+          </tr>
+          <tr>
+            <td>Skills</td>
+            <td>4 个 skill 目录，<code class="inline">virtual_mode=True</code></td>
+            <td>把 GB 标准审核知识与质量清单按需注入上下文，避免污染主 prompt</td>
+          </tr>
+          <tr>
+            <td>HITL</td>
+            <td><code class="inline">interrupt_on</code> 覆盖写文件、记忆更新、MinerU 解析、审核、构建索引</td>
+            <td>在覆写用户原文件、产物落盘、长期记忆更新前必须由人 approve/edit</td>
+          </tr>
+          <tr>
+            <td>Response Format</td>
+            <td><code class="inline">response_format=AgentResult</code>（pydantic）</td>
+            <td>统一摘要/产物/告警/下一步结构，下游 FastAPI BFF 容易消费</td>
+          </tr>
+          <tr>
+            <td>持久化</td>
+            <td>本地 MemorySaver + InMemoryStore；部署态由 LangGraph Server 注入</td>
+            <td>同一套工厂，<code class="inline">langgraph_server</code> 切换开发 / 生产</td>
+          </tr>
+          <tr>
+            <td>Managed Deep Agents</td>
+            <td><code class="inline">managed_project_shape()</code> 映射到 <code class="inline">AGENTS.md</code> / <code class="inline">skills/</code> / <code class="inline">subagents/</code> / <code class="inline">tools.json</code></td>
+            <td>未来可零改造迁移到 LangSmith Managed Deep Agents</td>
+          </tr>
+        </tbody>
+      </table>
 
-  <!-- 12. 与 Deep Agents 范式对齐 -->
-  <section id="alignment">
-    <h2>12. 与 Deep Agents 范式的对齐与差异</h2>
-    <table>
-      <thead>
-        <tr><th>Deep Agents 官方能力</th><th>本项目实现</th><th>对标准文档助手的价值</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>任务规划</td>
-          <td><code class="inline">MAIN_SYSTEM_PROMPT</code> 强制 <code class="inline">write_todos</code>，复杂任务先拆解</td>
-          <td>把“解析 → 抽取 → 审核 → 报告”拆成可追踪步骤，避免遗漏链路</td>
-        </tr>
-        <tr>
-          <td>Filesystem (Backend)</td>
-          <td>CompositeBackend：<code class="inline">/memories/</code> + <code class="inline">/skills/</code> + <code class="inline">/workspace/</code> + StateBackend 默认</td>
-          <td>把临时 scratch、长期记忆、领域知识、业务文件分到不同后端，治理清晰</td>
-        </tr>
-        <tr>
-          <td>Subagents</td>
-          <td>5 个专业 SubAgent，每个挂专属 Skill、工具与 HITL 配置</td>
-          <td>在隔离上下文里执行大文本解析/审核/草稿生成，主 Agent 只看摘要</td>
-        </tr>
-        <tr>
-          <td>Memory</td>
-          <td>启动注入 AGENTS.md / preferences.md；运行时走 StoreBackend；更新走 <code class="inline">propose_memory_update</code></td>
-          <td>长期沉淀用户偏好与项目笔记，<strong>不可被 Agent 直写</strong></td>
-        </tr>
-        <tr>
-          <td>Skills</td>
-          <td>4 个 skill 目录，<code class="inline">virtual_mode=True</code></td>
-          <td>把 GB 标准审核知识与质量清单按需注入上下文，避免污染主 prompt</td>
-        </tr>
-        <tr>
-          <td>HITL</td>
-          <td><code class="inline">interrupt_on</code> 覆盖写文件、记忆更新、MinerU 解析、审核、构建索引</td>
-          <td>在覆写用户原文件、产物落盘、长期记忆更新前必须由人 approve/edit</td>
-        </tr>
-        <tr>
-          <td>Response Format</td>
-          <td><code class="inline">response_format=AgentResult</code>（pydantic）</td>
-          <td>统一摘要/产物/告警/下一步结构，下游 FastAPI BFF 容易消费</td>
-        </tr>
-        <tr>
-          <td>持久化</td>
-          <td>本地 MemorySaver + InMemoryStore；部署态由 LangGraph Server 注入</td>
-          <td>同一套工厂，<code class="inline">langgraph_server</code> 切换开发 / 生产</td>
-        </tr>
-        <tr>
-          <td>Managed Deep Agents（私有预览）</td>
-          <td>提供 <code class="inline">managed_project_shape()</code> 映射到项目结构</td>
-          <td>未来可零改造迁移到 LangSmith Managed Deep Agents</td>
-        </tr>
-      </tbody>
-    </table>
+      <h3>差异 / 注意点</h3>
+      <ul>
+        <li>主 Agent 通过 <code class="inline">task</code> 工具把"读 PDF/Word/审核"委派给 SubAgent，避免上下文被大文本污染 —— 与官方
+          <em>"Offload large results across long runs"</em> 思路一致，但通过显式委派落地。</li>
+        <li>技能 / 记忆权限统一收紧为 "read=allow / write=deny"，更新走工具 + HITL；这与官方
+          <em>"Pause for human approval at critical decision points"</em> 一致但更严格。</li>
+        <li><code class="inline">response_format</code> 强制结构化输出，使 SSE / FastAPI BFF 渲染更稳定。</li>
+      </ul>
+    </section>
 
-    <h3>差异 / 注意点</h3>
-    <ul>
-      <li>主 Agent 通过 <code class="inline">task</code> 工具把“读 PDF/Word/审核”委派给 SubAgent，避免上下文被大文本污染 —— 与官方
-        <em>“Offload large results across long runs”</em> 思路一致，但通过显式委派落地。</li>
-      <li>技能 / 记忆权限统一收紧为 “read=allow / write=deny”，更新走工具 + HITL；这与官方
-        <em>“Pause for human approval at critical decision points”</em> 一致但更严格。</li>
-      <li><code class="inline">response_format</code> 强制结构化输出，使 SSE / FastAPI BFF 渲染更稳定。</li>
-    </ul>
-  </section>
-
-  <footer>
-    <p>
-      生成于 2026-06-04 · 基于 <code class="inline">d:\CNS_Assistant\src\standard_document_assistant</code>
-      目录结构与 LangChain Deep Agents 官方文档（overview / customization / human-in-the-loop / context-engineering / managed-deep-agents）。
-      仓库内对应设计文档：
-      <a href="file:///d:/CNS_Assistant/design_docs/DEEP_AGENT_SPEC.md">DEEP_AGENT_SPEC.md</a> ·
-      <a href="file:///d:/CNS_Assistant/design_docs/STANDARD_REVIEW_DEEP_AGENTS_FINAL_DESIGN.md">STANDARD_REVIEW_DEEP_AGENTS_FINAL_DESIGN.md</a> ·
-      <a href="file:///d:/CNS_Assistant/design_docs/FASTAPI_BFF_PHASE1_API.md">FASTAPI_BFF_PHASE1_API.md</a>。
-    </p>
-  </footer>
+    <footer>
+      <p>
+        生成于 2026-06-04 · 基于 <code class="inline">d:\deep-agents\src\standard_document_assistant</code>
+        目录结构与 LangChain Deep Agents 官方文档（overview / customization / human-in-the-loop / context-engineering / subagents / backends / skills）。
+        仓库内对应设计文档：
+        <a href="file:///d:/deep-agents/design_docs/DEEP_AGENT_SPEC.md">DEEP_AGENT_SPEC.md</a> ·
+        <a href="file:///d:/deep-agents/design_docs/STANDARD_REVIEW_DEEP_AGENTS_FINAL_DESIGN.md">STANDARD_REVIEW_DEEP_AGENTS_FINAL_DESIGN.md</a> ·
+        <a href="file:///d:/deep-agents/design_docs/FASTAPI_BFF_PHASE1_API.md">FASTAPI_BFF_PHASE1_API.md</a>。
+      </p>
+    </footer>
+</main>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-yaml.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-markdown.min.js"></script>
+<script>
+  // Sidebar active state
+  const links = document.querySelectorAll('aside.sidebar a[href^="#"]');
+  const sections = document.querySelectorAll('section[id]');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const link = document.querySelector(`aside.sidebar a[href="#${e.target.id}"]`);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => observer.observe(s));
+
+  // Smooth scroll
+  links.forEach(l => l.addEventListener('click', e => {
+    e.preventDefault();
+    const id = l.getAttribute('href');
+    document.querySelector(id).scrollIntoView({ behavior: 'smooth' });
+  }));
+
+  // Subagent filter
+  const subagentInput = document.getElementById('subagentFilter');
+  if (subagentInput) {
+    subagentInput.addEventListener('input', () => {
+      const q = subagentInput.value.toLowerCase();
+      let visible = 0;
+      document.querySelectorAll('#subagentGrid .card').forEach(c => {
+        const key = c.dataset.key || '';
+        const text = c.textContent.toLowerCase();
+        const show = !q || key.includes(q) || text.includes(q);
+        c.classList.toggle('hidden', !show);
+        if (show) visible++;
+      });
+      document.getElementById('subagentCount').textContent = `${visible} / 6`;
+    });
+    subagentInput.dispatchEvent(new Event('input'));
+  }
+
+  // Skill filter
+  const skillInput = document.getElementById('skillFilter');
+  if (skillInput) {
+    skillInput.addEventListener('input', () => {
+      const q = skillInput.value.toLowerCase();
+      let visible = 0;
+      document.querySelectorAll('#skillGrid .card').forEach(c => {
+        const key = c.dataset.key || '';
+        const text = c.textContent.toLowerCase();
+        const show = !q || key.includes(q) || text.includes(q);
+        c.classList.toggle('hidden', !show);
+        if (show) visible++;
+      });
+      document.getElementById('skillCount').textContent = `${visible} / 4`;
+    });
+    skillInput.dispatchEvent(new Event('input'));
+  }
+
+  // Tool filter
+  const toolInput = document.getElementById('toolFilter');
+  if (toolInput) {
+    const updateToolCount = () => {
+      const rows = document.querySelectorAll('#toolTable tbody tr');
+      let visible = 0;
+      rows.forEach(r => {
+        if (!r.classList.contains('hidden')) visible++;
+      });
+      const el = document.getElementById('toolCount');
+      if (el) el.textContent = `${visible} / ${rows.length}`;
+    };
+    toolInput.addEventListener('input', () => {
+      const q = toolInput.value.toLowerCase();
+      document.querySelectorAll('#toolTable tbody tr').forEach(r => {
+        const key = r.dataset.key || '';
+        const text = r.textContent.toLowerCase();
+        const show = !q || key.includes(q) || text.includes(q);
+        r.classList.toggle('hidden', !show);
+      });
+      updateToolCount();
+    });
+    updateToolCount();
+  }
+
+  // Global sidebar search → highlight
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) {
+    let timer;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const q = searchInput.value.trim().toLowerCase();
+        document.querySelectorAll('mark').forEach(m => {
+          const txt = m.textContent;
+          const parent = m.parentNode;
+          parent.replaceChild(document.createTextNode(txt), m);
+          parent.normalize();
+        });
+        if (!q) return;
+        const root = document.querySelector('main');
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach(n => {
+          const text = n.nodeValue.toLowerCase();
+          if (text.includes(q)) {
+            const span = document.createElement('span');
+            span.innerHTML = n.nodeValue.replace(new RegExp(q, 'gi'),
+              m => `<mark>${m}</mark>`);
+            n.parentNode.replaceChild(span, n);
+          }
+        });
+      }, 200);
+    });
+  }
+
+  // Tabs
+  document.querySelectorAll('.tabs').forEach(tabs => {
+    const tabBtns = tabs.querySelectorAll('.tab');
+    const panels = document.querySelectorAll(`[data-tab-group="${tabs.dataset.tabGroup}"] .tab-panel`);
+    tabBtns.forEach(btn => btn.addEventListener('click', () => {
+      const target = btn.dataset.tab;
+      tabBtns.forEach(b => b.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const panel = document.querySelector(`.tab-panel[data-tab="${target}"]`);
+      if (panel) panel.classList.add('active');
+    }));
+  });
+</script>
 
 </body>
 </html>

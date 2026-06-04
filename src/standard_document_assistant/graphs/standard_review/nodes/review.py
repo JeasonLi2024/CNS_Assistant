@@ -136,7 +136,8 @@ def quality_gate(
 
     config = load_config().standard_review
     round_idx = int(state.get("review_round") or 0)
-    max_rounds = int(state.get("max_review_rounds") or config.max_review_rounds)
+    configured_rounds = state.get("max_review_rounds")
+    max_rounds = int(config.max_review_rounds if configured_rounds is None else configured_rounds)
     insufficient = list(state.get("insufficient_scopes") or [])
     partial_mode = state.get("partial_mode") or "sectional"
 

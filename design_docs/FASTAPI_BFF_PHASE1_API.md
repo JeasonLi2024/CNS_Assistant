@@ -246,7 +246,71 @@ curl.exe -X POST `
   -d "{\"thread_id\":\"draft-loop-001\",\"file_path\":\"/workspace/input/uploads/draft-loop-001/draft.md\",\"review_options\":{\"mode\":\"scoped_content\",\"target_scopes\":[\"scope\",\"normative_references\"],\"disable_widen\":true},\"return_report_content\":true,\"return_result_json\":true}"
 ```
 
-### 5.5 示例：全文内容审核
+### 5.5 本地脚本：上传并执行非流式审核
+
+仓库提供联调脚本 [`scripts/test_fastapi_upload_review.py`](../scripts/test_fastapi_upload_review.py)，用于一次性测试：
+
+1. `GET /health`
+2. `POST /api/threads/{thread_id}/uploads`
+3. `POST /api/review-jobs/standard-review`
+
+若测试过程中注意到终端输出”卡住“，可以打开LangSmith Tracing，查看详细调用流程。大概率属于模型调用缓慢。
+
+启动前提：激活虚拟环境，确保依赖已安装。
+
+```powershell
+# 终端 1：LangGraph Server
+# $env:STANDARD_DOC_ENABLE_WORKSPACE_BACKEND = "1"
+# $env:STANDARD_DOC_WORKSPACE_ROOT = "C:\Users\32084\AppData\Local\Temp\deep_agents_workspace"
+# DashScope 外联不可用时，本地联调可临时开启
+# $env:STANDARD_DOC_LLM_OFFLINE_FALLBACK = "1"
+langgraph dev --host 127.0.0.1 --port 2024 --no-browser
+
+# 终端 2：FastAPI BFF
+# $env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
+# $env:STANDARD_DOC_ARTIFACT_API_BASE = "http://127.0.0.1:8080"
+# $env:STANDARD_DOC_ENABLE_WORKSPACE_BACKEND = "1"
+# $env:STANDARD_DOC_WORKSPACE_ROOT = "C:\Users\32084\AppData\Local\Temp\deep_agents_workspace"
+uvicorn standard_document_assistant.api.app:app --host 0.0.0.0 --port 8080
+```
+
+测试“仅审核前言”：
+
+```powershell
+python.exe scripts\test_fastapi_upload_review.py `
+  --file "C:\Users\32084\Desktop\GB-T-15034-2009_2.md" `
+  --mode scoped_content `
+  --target-scopes foreword `
+  --disable-widen `
+  --force-rebuild-index `
+  --save-response workspace\tmp\fastapi_review_response.json
+```
+
+常用参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--file` | 本地待上传文件。脚本会先调用上传接口，后续审核使用上传返回的 `virtual_path`。 |
+| `--mode` | 对应 `review_options.mode`，如 `scoped_content`、`content_only`、`format_only`。 |
+| `--target-scopes` | 逗号分隔章节 key，如 `foreword` 或 `scope,normative_references`。 |
+| `--disable-widen` | 映射为 `review_options.disable_widen=true`，严格部分审核时使用。 |
+| `--force-rebuild-index` | 映射为 `review_options.force_rebuild_index=true`，规则更新后建议使用。 |
+| `--save-response` | 保存完整审核响应 JSON，便于分析 `issues`、报告和产物路径。 |
+
+输出解读：
+
+- `uploaded_virtual_path`：上传接口返回的 `/workspace/...` 路径。
+- `status=completed`：FastAPI 已拿到标准审核最终结果；不代表审核通过。
+- `passed=false`：结构化审核未通过，生成工作流应读取报告并修改草稿。
+- `summary.total_issues / failed / warn / insufficient_context`：问题总数、失败数、警告数、依据不足数。
+- `issues_by_scope`：用于确认部分审核是否集中在目标章节。
+- `output_paths`：标准审核图生成的报告、结果、trace、manifest 虚拟路径。
+- `registered_artifacts`：FastAPI 登记后的可下载产物。
+- `report_preview`：报告 Markdown 的前 500 字，完整内容在保存的 JSON 中。
+
+如果出现 `HTTP 502` 且 detail 包含 `/runs/wait` 的 `404 Not Found`，说明 FastAPI 进程仍是旧代码；重启 uvicorn 后再测。当前实现会在 `runs.wait` 不可用时自动改用 stream 收集最终 state。
+
+### 5.6 示例：全文内容审核
 
 ```json
 {
@@ -258,7 +322,7 @@ curl.exe -X POST `
 }
 ```
 
-### 5.6 示例：内容 + 格式审核
+### 5.7 示例：内容 + 格式审核
 
 ```json
 {
@@ -271,7 +335,7 @@ curl.exe -X POST `
 }
 ```
 
-### 5.7 示例：仅格式审核
+### 5.8 示例：仅格式审核
 
 ```json
 {
@@ -283,7 +347,7 @@ curl.exe -X POST `
 }
 ```
 
-### 5.8 示例：按行范围审核
+### 5.9 示例：按行范围审核
 
 ```json
 {
@@ -298,7 +362,7 @@ curl.exe -X POST `
 }
 ```
 
-### 5.9 返回体
+### 5.10 返回体
 
 ```json
 {

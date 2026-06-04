@@ -151,3 +151,18 @@ def test_review_tools_do_not_expose_runtime_in_schema() -> None:
     assert "runtime" not in run_standard_review.args
     assert "runtime" not in run_format_source_review.args
     assert "runtime" not in validate_review_result_schema.args
+
+
+def test_quality_gate_respects_zero_max_review_rounds() -> None:
+    from standard_document_assistant.graphs.standard_review.nodes.review import quality_gate
+
+    command = quality_gate(
+        {
+            "review_round": 0,
+            "max_review_rounds": 0,
+            "insufficient_scopes": ["foreword"],
+            "partial_mode": "sectional",
+        }
+    )
+
+    assert command.goto == "format_review"

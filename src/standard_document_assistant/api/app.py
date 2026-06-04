@@ -306,17 +306,65 @@ async def direct_standard_review(payload: DirectStandardReviewRequest) -> dict[s
     state = _build_direct_review_state(payload)
     client = get_langgraph_client()
     try:
-        result = await client.runs.wait(
-            thread_id,
-            "standard_review",
-            input=state,
-            raise_error=True,
-        )
+        result = await _run_direct_review_nonstream(client, thread_id=thread_id, state=state)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"标准审核执行失败：{exc}") from exc
     if not isinstance(result, dict):
         raise HTTPException(status_code=502, detail="标准审核返回值不是对象。")
     return _direct_review_response(thread_id=thread_id, payload=payload, state_result=result)
+
+
+async def _run_direct_review_nonstream(
+    client,
+    *,
+    thread_id: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Run standard_review and return the final state.
+
+    Some local LangGraph dev versions expose streaming runs but return 404 for
+    the SDK's convenience ``/runs/wait`` endpoint. Keep ``wait`` as the primary
+    path, then fall back to collecting the last ``values`` event from stream.
+    """
+
+    try:
+        result = await client.runs.wait(
+            thread_id,
+            "standard_review",
+            input=state,
+            raise_error=True,
+            if_not_exists="create",
+        )
+        if isinstance(result, dict):
+            return result
+    except Exception as exc:
+        if not _is_runs_wait_unavailable(exc):
+            raise
+
+    latest_state: dict[str, Any] = {}
+    async for part in client.runs.stream(
+        thread_id,
+        "standard_review",
+        input=state,
+        stream_mode=["values"],
+        stream_subgraphs=True,
+        if_not_exists="create",
+    ):
+        event = getattr(part, "event", None)
+        data = getattr(part, "data", None)
+        if isinstance(part, dict):
+            event = part.get("event")
+            data = part.get("data")
+        if event == "values" and isinstance(data, dict):
+            latest_state = data
+    if not latest_state:
+        raise RuntimeError("LangGraph runs.wait 不可用，stream fallback 也没有返回最终 state。")
+    return latest_state
+
+
+def _is_runs_wait_unavailable(exc: Exception) -> bool:
+    text = str(exc)
+    return "404" in text and "/runs/wait" in text
 
 
 @app.post("/api/review-jobs/standard-review/stream")
