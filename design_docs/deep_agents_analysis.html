@@ -267,6 +267,12 @@
       <li><a href="#flow">21. 端到端流程</a></li>
       <li><a href="#alignment">22. 与官方范式对齐</a></li>
     </ul>
+
+    <h3>深度讲解</h3>
+    <ul>
+      <li><a href="#subgraphs-detail">23. 两个子图的设计与代码</a></li>
+      <li><a href="#review-detail">24. 标准审核的代码与算法</a></li>
+    </ul>
   </aside>
 
   <main>
@@ -1417,6 +1423,1052 @@ def quality_gate(state, runtime=None) -> Command[Literal["widen_review_scope", "
           <em>"Pause for human approval at critical decision points"</em> 一致但更严格。</li>
         <li><code class="inline">response_format</code> 强制结构化输出，使 SSE / FastAPI BFF 渲染更稳定。</li>
       </ul>
+    </section>
+
+    <section id="subgraphs-detail">
+      <h2>23. 两个子图的设计与代码（精读）</h2>
+      <p>本节完整精读
+        <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/metadata_extraction/graph.py"><code class="inline">graphs/metadata_extraction/</code></a>
+        和
+        <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/graph.py"><code class="inline">graphs/standard_review/</code></a>
+        两个子图。两者都遵循「<strong>StateGraph + context_schema + 节点级 RetryPolicy + get_stream_writer</strong>」的同一套设计骨架，
+        但拓扑结构、状态结构、回流控制完全不同。</p>
+
+      <h3>23.1 共同设计骨架</h3>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>① StateGraph + context_schema</h3>
+          <p>两图都使用
+            <code class="inline">StateGraph(State, context_schema=Context)</code>，其中
+            <code class="inline">State</code> 是 <code class="inline">TypedDict, total=False</code> 描述的状态字典，
+            <code class="inline">Context</code> 是<strong>横切关注点</strong>（trace_id / job_id / cover_metadata_hint / quality_strict / parent_tool_call_id），通过
+            <code class="inline">graph.invoke(..., context=...)</code> 由 Tool 层透传，节点内用
+            <code class="inline">runtime.context</code> 读取，避免污染 state。</p>
+          <p class="muted small">依据 <a href="https://docs.langchain.com/oss/python/langgraph/graph-api#runtime-context">LangGraph Runtime context</a> 与
+            <a href="https://docs.langchain.com/oss/python/deepagents/context-engineering#runtime-context">Deep Agents Runtime context</a>。</p>
+        </div>
+        <div class="card">
+          <h3>② 节点级 RetryPolicy</h3>
+          <p>对调用 LLM 的节点（<code class="inline">run_langextract</code> / <code class="inline">judge_rules</code> / <code class="inline">aggregate</code>）挂
+            <code class="inline">RetryPolicy(max_attempts=2, jitter=True, retry_on=(RequestException, RuntimeError))</code>。
+            只重试网络 / 协议层瞬态错误，<strong>不</strong>重试 LLM 输出解析错误，避免无效消耗。</p>
+          <p class="muted small">依据 <a href="https://docs.langchain.com/oss/python/langgraph/use-graph-api#exception-handling">LangGraph 异常处理</a>：<em>"Only failing branches are retried"</em>。</p>
+        </div>
+        <div class="card">
+          <h3>③ get_stream_writer 推送 SSE</h3>
+          <p>所有节点用 <code class="inline">get_stream_writer()</code> 推送命名空间事件；与 MinerU 的
+            <code class="inline">mineru.*</code>、审核的 <code class="inline">review.*</code> 共同形成
+            <code class="inline">&lt;domain&gt;.&lt;stage&gt;</code> 统一规范。
+            失败容忍：图外调用（单测 / Tool 直调）<code class="inline">RuntimeError</code> 时静默忽略。</p>
+        </div>
+        <div class="card">
+          <h3>④ checkpointer 不显式挂</h3>
+          <p>依靠主图 <code class="inline">compile(checkpointer=MemorySaver())</code> 自动传播到子图，命名空间由
+            <code class="inline">thread_id</code> 隔离。依据
+            <a href="https://docs.langchain.com/oss/python/langgraph/add-memory#use-in-subgraphs">Use in subgraphs</a>。</p>
+        </div>
+      </div>
+
+      <h3>23.2 metadata_extraction 子图：线性 DAG</h3>
+      <p>节点数：<strong>7</strong>。拓扑结构是<strong>严格线性</strong>：
+        <code class="inline">START → load_markdown → slice_scope → run_langextract → aggregate_fields → validate_schema → persist_output → write_manifest → END</code>。
+        每个节点都对输入做一道加工，最终产出 3 类产物 + 1 份 manifest。</p>
+
+      <h4>状态（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/metadata_extraction/state.py">state.py</a>）</h4>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\graphs\metadata_extraction\state.py</pre>
+      <pre class="language-python"><code class="language-python">class MetadataExtractionState(TypedDict, total=False):
+    # 输入
+    source_path: str; source_virtual_path: str; markdown: str
+    scope_mode: Literal["metadata", "full"]
+    output_filename: str; write_artifacts: bool
+    # 中间产物
+    scoped_text: str; scoped_text_chars: int
+    langextract_result: Any          # lx.data.AnnotatedDocument
+    aggregated: dict[str, Any]       # 19 字段聚合
+    cover_metadata_hint: dict[str, Any]
+    validation: dict[str, Any]
+    # 输出路径
+    output_path: str; output_virtual_path: str
+    annotated_path: str; annotated_virtual_path: str
+    normalized_path: str; normalized_virtual_path: str
+    manifest_path: str; manifest_virtual_path: str
+    # 反馈通道
+    quality_warnings: Annotated[list[str], operator.add]   # 用 operator.add 让节点累加
+    errors: Annotated[list[str], operator.add]
+    warnings: Annotated[list[str], operator.add]
+    status: Literal["ok", "failed"]; extracted_items: int
+
+class MetadataExtractionContext(TypedDict, total=False):
+    """Runtime context（横切关注点，不入 state）。"""
+    tenant_id: str; user_id: str; trace_id: str
+    quality_strict: bool              # 覆盖 config 的 strict_validation
+    parent_tool_call_id: str | None   # 仅用于 trace 关联
+    cover_metadata_hint: dict[str, Any]   # parser 透传的封面 hint</code></pre>
+
+      <h4>节点精读（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/metadata_extraction/nodes.py">nodes.py</a>）</h4>
+      <details class="acc">
+        <summary>1) <code class="inline">load_markdown</code> · 读源</summary>
+        <div class="body">
+          优先使用 state.markdown（由 Tool 直接传入，避免重复 IO）；否则从
+          <code class="inline">source_virtual_path</code> 解析到 host 路径后读 UTF-8。
+          路径解析走 <code class="inline">resolve_workspace_read_path(allowed_roots=[UPLOADS_DIR, OUTPUT_DIR], suffixes={.md/.markdown/.txt})</code>，
+          把 <code class="inline">/workspace/</code> 虚拟路径安全转回 host 路径并校验后缀。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>2) <code class="inline">slice_scope</code> · 范围截取 + 字节上限</summary>
+        <div class="body">
+          调用 <code class="inline">slice_metadata_scope(text, mode)</code>：
+          <code class="inline">"full"</code> 取全文，<code class="inline">"metadata"</code> 用正则
+          <code class="inline">(?im)^\s*#{1,6}\s*(?:第\s*4\s*章|4)(?!\s*[\.．]\s*\d)\s*…</code> 截到第 4 章前（聚焦封面 / 前言 / 2-3 章）。
+          截取后按 <code class="inline">config.metadata_extraction.scoped_text_max_bytes</code> 二次截断（UTF-8 编码后按字节），避免 LLM 超限。
+          推送 <code class="inline">meta.scoped</code> 流事件。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>3) <code class="inline">run_langextract</code> · 唯一一次外部 LLM 调用</summary>
+        <div class="body">
+          <ul>
+            <li>用 <code class="inline">@traceable(run_type="chain", name=...)</code> 包装 <code class="inline">_traced_run_extraction</code>，让 LangSmith 看到独立 run。</li>
+            <li>环境变量 <code class="inline">METADATA_MODEL_ID</code> 或 <code class="inline">MODEL_ID</code> 覆盖 model label（仅用于流事件展示）。</li>
+            <li>推送 <code class="inline">meta.extraction.start</code> / <code class="inline">meta.extraction.end</code> / <code class="inline">meta.extraction.error</code>。</li>
+            <li>挂 <code class="inline">_LANGEXTRACT_RETRY_POLICY</code>（详见骨架 ②）。</li>
+            <li>失败时设置 <code class="inline">status="failed"</code>，后续节点看到 <code class="inline">status==failed</code> 短路返回。</li>
+          </ul>
+        </div>
+      </details>
+      <details class="acc">
+        <summary>4) <code class="inline">aggregate_fields</code> · 字段聚合 + 封面 hint 兜底</summary>
+        <div class="body">
+          调用 <code class="inline">build_extraction_result(result, source_label)</code>：单值字段按"最早 start_pos 出现"取 1 个，多值字段按"start_pos + 文本"排序去重；推断 <code class="inline">标准性质</code>（GB 强 / GB/T 推 / GA 推 / GB/Z 指导性）和 <code class="inline">制修订</code>（有代替标准号=修订）。
+          <br><br>
+          <strong>关键</strong>：从 <code class="inline">runtime.context.cover_metadata_hint</code> 读封面 hint（Deep Agents best practice），与 <code class="inline">state.cover_metadata_hint</code> 双向兜底：
+          <code class="inline">ICS / CCS / 标准层级 / 标准号 / 代替标准号</code> 5 个高置信字段若 langextract 没抽出，会被 hint 覆盖。
+          推送 <code class="inline">meta.aggregated</code>（含单值 / 多值字段数、quality_warnings 计数）。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>5) <code class="inline">validate_schema</code> · Pydantic 校验（<strong>双入口</strong>）</summary>
+        <div class="body">
+          <strong>关键设计</strong>：<strong>不再</strong>自己 <code class="inline">StandardMetadataExtraction.model_validate(...)</code>，
+          而走 <a href="file:///d:/deep-agents/src/standard_document_assistant/tools/validation.py"><code class="inline">tools.validation.validate_output_schema(aggregated, schema_name="StandardMetadataExtraction")</code></a>，
+          与 Agent 工具调用入口保持完全一致的 schema 名 / 错误格式（依据
+          <a href="file:///d:/deep-agents/design_docs/module_architecture_review.md">module_architecture_review.md §4.3 item 5</a>）。
+          <br><br>
+          <code class="inline">strict</code> 标志优先取 <code class="inline">runtime.context.quality_strict</code>，兜底 <code class="inline">config.metadata_extraction.strict_validation</code>：
+          <ul>
+            <li>严格模式：校验失败 → <code class="inline">status="failed"</code>，后续节点短路。</li>
+            <li>宽松模式：保留 langextract 原始聚合结果，仅加 <code class="inline">quality_warnings</code>。</li>
+          </ul>
+        </div>
+      </details>
+      <details class="acc">
+        <summary>6) <code class="inline">persist_output</code> · 三件套落盘</summary>
+        <div class="body">
+          在 <code class="inline">METADATA_OUTPUT_DIR/{json,annotated,normalized}</code> 下：
+          <ul>
+            <li>聚合 JSON：<code class="inline">&lt;stem&gt;_metadata.json</code></li>
+            <li>annotated jsonl：<code class="inline">&lt;stem&gt;_annotated.jsonl</code>（langextract 原始带字符区间）</li>
+            <li>normalized json：<code class="inline">&lt;stem&gt;_normalized.json</code></li>
+          </ul>
+          推送 <code class="inline">meta.persisted</code>。filename 重名时
+          <code class="inline">allocate_unique_path</code> 自动加 <code class="inline">.1</code> / <code class="inline">.2</code> 后缀。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>7) <code class="inline">write_manifest</code> · ArtifactManifest</summary>
+        <div class="body">
+          把 3 类产物 + 1 份 manifest 登记为 <code class="inline">ArtifactRef</code>，primary 指向 metadata_json；合并
+          <code class="inline">warnings + quality_warnings</code>；若 <code class="inline">output_virtual_path</code> 非空，附加 <code class="inline">download</code> 字段供 BFF 下载。
+          推送 <code class="inline">meta.manifest</code>。
+        </div>
+      </details>
+
+      <h4>图构建器（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/metadata_extraction/graph.py">graph.py</a>）</h4>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\graphs\metadata_extraction\graph.py · <span class="ln">L36-L77</span></pre>
+      <pre class="language-python"><code class="language-python">@lru_cache(maxsize=1)
+def get_metadata_extraction_graph():
+    builder = StateGraph(MetadataExtractionState, context_schema=MetadataExtractionContext)
+    builder.add_node("load_markdown", load_markdown)
+    builder.add_node("slice_scope", slice_scope)
+    builder.add_node("run_langextract", run_langextract, retry_policy=_LANGEXTRACT_RETRY_POLICY)
+    builder.add_node("aggregate_fields", aggregate_fields)
+    builder.add_node("validate_schema", validate_schema)
+    builder.add_node("persist_output", persist_output)
+    builder.add_node("write_manifest", write_manifest)
+    builder.add_edge(START, "load_markdown")
+    builder.add_edge("load_markdown", "slice_scope")
+    builder.add_edge("slice_scope", "run_langextract")
+    builder.add_edge("run_langextract", "aggregate_fields")
+    builder.add_edge("aggregate_fields", "validate_schema")
+    builder.add_edge("validate_schema", "persist_output")
+    builder.add_edge("persist_output", "write_manifest")
+    builder.add_edge("write_manifest", END)
+    return builder.compile(name=METADATA_EXTRACTION_GRAPH_NAME)</code></pre>
+      <p class="muted small">
+        <code class="inline">@lru_cache(maxsize=1)</code>：单进程内只编译一次；Tool 层多次调用零成本。
+      </p>
+
+      <h3>23.3 standard_review 子图：<strong>带回路</strong>的 11 节点图</h3>
+      <p>节点数：<strong>10 普通节点 + 1 Command 节点</strong>。拓扑关键：</p>
+      <ul>
+        <li><strong>主路径</strong>：<code class="inline">START → ingest → retrieve_rules → judge_rules → quality_gate → format_review → aggregate → write_outputs → write_manifest → END</code></li>
+        <li><strong>扩域回路</strong>：<code class="inline">quality_gate</code> 是 <code class="inline">Command[Literal["widen_review_scope", "format_review"]]</code> 节点，在 evidence 不足时
+          <code class="inline">goto="widen_review_scope" → reload_review_rules → judge_rules</code> 回到主路径，<strong>最多 max_review_rounds 轮</strong>。</li>
+      </ul>
+
+      <div class="diagram">
+        <svg viewBox="0 0 1080 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="standard_review 子图">
+          <defs>
+            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="#97a3c4"/>
+            </marker>
+            <linearGradient id="gN" x1="0" x2="1"><stop offset="0" stop-color="#1f2a4d"/><stop offset="1" stop-color="#182241"/></linearGradient>
+            <linearGradient id="gG" x1="0" x2="1"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#f43f5e"/></linearGradient>
+          </defs>
+          <g font-size="12" fill="#e6ecff">
+            <rect x="20"  y="180" width="120" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="80"  y="208" text-anchor="middle">START</text>
+            <rect x="160" y="180" width="120" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="220" y="208" text-anchor="middle">ingest</text>
+            <rect x="300" y="180" width="140" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="370" y="208" text-anchor="middle">retrieve_rules</text>
+            <rect x="460" y="180" width="140" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="530" y="208" text-anchor="middle">judge_rules</text>
+            <rect x="620" y="180" width="140" height="48" rx="10" fill="url(#gG)" stroke="#2a3563"/><text x="690" y="208" text-anchor="middle">quality_gate</text>
+            <rect x="780" y="180" width="140" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="850" y="208" text-anchor="middle">format_review</text>
+            <rect x="620" y="280" width="140" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="690" y="308" text-anchor="middle">aggregate</text>
+            <rect x="460" y="280" width="140" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="530" y="308" text-anchor="middle">write_outputs</text>
+            <rect x="300" y="280" width="140" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="370" y="308" text-anchor="middle">write_manifest</text>
+            <rect x="140" y="280" width="120" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="200" y="308" text-anchor="middle">END</text>
+            <rect x="620" y="40"  width="160" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="700" y="68" text-anchor="middle">widen_review_scope</text>
+            <rect x="800" y="40"  width="160" height="48" rx="10" fill="url(#gN)" stroke="#2a3563"/><text x="880" y="68" text-anchor="middle">reload_review_rules</text>
+          </g>
+          <g stroke="#97a3c4" fill="none" stroke-width="1.5">
+            <line x1="140" y1="204" x2="160" y2="204" marker-end="url(#arr2)"/>
+            <line x1="280" y1="204" x2="300" y2="204" marker-end="url(#arr2)"/>
+            <line x1="440" y1="204" x2="460" y2="204" marker-end="url(#arr2)"/>
+            <line x1="600" y1="204" x2="620" y2="204" marker-end="url(#arr2)"/>
+            <line x1="760" y1="204" x2="780" y2="204" marker-end="url(#arr2)"/>
+            <line x1="850" y1="228" x2="690" y2="280" marker-end="url(#arr2)"/>
+            <line x1="690" y1="280" x2="530" y2="328" marker-end="url(#arr2)"/>
+            <line x1="460" y1="304" x2="370" y2="328" marker-end="url(#arr2)"/>
+            <line x1="300" y1="304" x2="260" y2="328" marker-end="url(#arr2)" stroke="#f59e0b" stroke-dasharray="6,3"/>
+            <line x1="200" y1="280" x2="200" y2="328" marker-end="url(#arr2)"/>
+            <!-- widen path -->
+            <path d="M 690 180 C 690 100, 700 88, 700 88" stroke-dasharray="6,3" fill="none" stroke="#f59e0b" marker-end="url(#arr2)"/>
+            <line x1="780" y1="64"  x2="800" y2="64" marker-end="url(#arr2)" stroke="#f59e0b" stroke-dasharray="6,3"/>
+            <path d="M 880 88 C 880 200, 600 200, 600 200" fill="none" stroke="#f59e0b" stroke-dasharray="6,3" marker-end="url(#arr2)"/>
+          </g>
+          <text x="690" y="380" text-anchor="middle" fill="#c8d6ff" font-size="12">主路径（单向）</text>
+          <text x="780" y="20" text-anchor="middle" fill="#fde2b0" font-size="12">扩域回路（最多 max_review_rounds 轮）</text>
+        </svg>
+      </div>
+
+      <h4>状态（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/state.py">state.py</a>）</h4>
+      <p>标准审核的 state 复杂度远高于 metadata_extraction，包含 <strong>4 类</strong>字段：</p>
+      <table>
+        <thead><tr><th>类别</th><th>字段</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>输入参数</td>
+            <td><code class="inline">job_id / trace_id / content_path / source_path / manifest_path / target_scopes / line_start / line_end / top_k / format_only / output_subdir / force_rebuild_index / partial_mode</code></td>
+            <td>由 Tool 层透传</td>
+          </tr>
+          <tr>
+            <td>解析结果</td>
+            <td><code class="inline">parsed_document / scope_text_map / active_scope_keys / format_document / format_facts</code></td>
+            <td>ingest 节点产生</td>
+          </tr>
+          <tr>
+            <td>检索与规则</td>
+            <td><code class="inline">section_rules / full_document_rules / retrieval_trace / rules_metadata / section_rule_objects / full_document_rule_objects</code></td>
+            <td>retrieve 节点产生（rule_objects 用于 judge 反序列化）</td>
+          </tr>
+          <tr>
+            <td>反馈通道<br>（<code class="inline">operator.add</code>）</td>
+            <td><code class="inline">issues / warnings / errors / events / trace_events</code></td>
+            <td>所有节点用 <code class="inline">Annotated[list, operator.add]</code> 追加而非覆盖</td>
+          </tr>
+          <tr>
+            <td>汇总与输出</td>
+            <td><code class="inline">scope_summary / audit_summary / aggregate_summary / report_markdown / result_payload / trace_payload / output_paths</code></td>
+            <td>aggregate / report 节点产生</td>
+          </tr>
+          <tr>
+            <td>回路控制</td>
+            <td><code class="inline">review_round / max_review_rounds / insufficient_scopes / widened / final_status / status</code></td>
+            <td>quality_gate 决定是否回路</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>节点精读（10 节点 + 1 Command）</h4>
+      <details class="acc">
+        <summary>1) <code class="inline">ingest</code> · 读源 + 章节分类</summary>
+        <div class="body">
+          三个分支：
+          <ul>
+            <li><strong>format_only</strong>：直接走源文件，跳过 markdown 解析。</li>
+            <li><strong>含 manifest_path</strong>：用 manifest 的 <code class="inline">primary_artifact</code> 推断 content_path，<code class="inline">source_virtual_path</code> 推断源 PDF/DOCX。</li>
+            <li><strong>仅 content_path</strong>：读 markdown → <code class="inline">parse_markdown_document</code> → <code class="inline">build_scope_text_map</code> → <code class="inline">normalize_scope_keys</code> 过滤 target_scopes。</li>
+          </ul>
+          关键：<code class="inline">parsed_document</code> 走 <code class="inline">serialize_document(doc)</code> 落盘为可 JSON 化的字典（state 必须是 dict），子图结束后 deserialize 回来给 judge。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>2) <code class="inline">retrieve_rules</code> · FAISS / TF-IDF 检索</summary>
+        <div class="body">
+          调 <code class="inline">load_knowledge_base(config, force_rebuild=...)</code> 拿到 <code class="inline">(kb, kb_meta)</code>。
+          <ul>
+            <li><code class="inline">force</code> 决定是否重建索引（priority：<code class="inline">state.force_rebuild_index</code> &gt; <code class="inline">config.auto_rebuild_index</code>）。</li>
+            <li><code class="inline">filter_content_audit_rules(kb.rules)</code> 排除 <code class="inline">scope=="format"</code> 和 <code class="inline">analysis_mode=="format_only"</code> 的规则。</li>
+            <li>对每个 <code class="inline">active_scope_keys</code> 调 <code class="inline">kb.search(scope, scope, top_k)</code> 去重后入 <code class="inline">section_rules</code>。</li>
+            <li><code class="inline">analysis_mode=="full_document"</code> 的规则直接进 <code class="inline">full_document_rules</code>。</li>
+            <li>同时写 <code class="inline">section_rule_objects</code>（RuleItem dict）和 <code class="inline">section_rules</code>（meta dict）双份，给下游不同消费者。</li>
+          </ul>
+        </div>
+      </details>
+      <details class="acc">
+        <summary>3) <code class="inline">judge_rules</code> · LLM Judge（<strong>子图核心</strong>）</summary>
+        <div class="body">
+          三条路径：
+          <ul>
+            <li><strong>format_only</strong> → 直接发 <code class="inline">judge_rules.skipped</code> 事件，跳过。</li>
+            <li><strong>未启用 LLM</strong> → <code class="inline">_deterministic_judge</code>：对每条 section_rule 生成 <code class="inline">insufficient_context</code> issue。</li>
+            <li><strong>启用 LLM</strong>：<br>
+              a) <code class="inline">deserialize_document</code> 还原 ParsedMarkdownDocument；<br>
+              b) 把 <code class="inline">section_rule_objects</code> / <code class="inline">full_document_rule_objects</code> 反序列化为 <code class="inline">RuleItem</code> 列表；<br>
+              c) <code class="inline">judge.plan(rules, doc, scope_text_map)</code> → <code class="inline">JudgePlan</code> 列表（自动选策略）；<br>
+              d) <code class="inline">judge.run_dual_route(plans)</code> → <code class="inline">JudgeOutcome</code> 列表（<code class="inline">asyncio.gather</code> 并发）；<br>
+              e) 把 <code class="inline">status=="insufficient_context"</code> 的 issue 收集到 <code class="inline">insufficient_scopes</code>；<br>
+              f) <code class="inline">_merge_coverage_check</code> 叠加 scope 存在性检查（rule.target_scopes vs scope_text_map），缺失的 scope 产生 <code class="inline">warn</code> 级别 issue。</li>
+          </ul>
+          <strong>关键</strong>：<code class="inline">review_round + 1</code>，作为 quality_gate 回路依据。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>4) <code class="inline">quality_gate</code> · <code class="inline">Command[Literal[...]]</code> 回路决策</summary>
+        <div class="body">
+          <pre class="language-python"><code class="language-python">def quality_gate(state, runtime=None) -> Command[Literal["widen_review_scope", "format_review"]]:
+    if (not state.get("format_only")
+        and config.enable_llm_review
+        and partial_mode != "full_document"
+        and insufficient
+        and round_idx &lt; max_rounds):
+        return Command(update={...}, goto="widen_review_scope")
+    return Command(update={...}, goto="format_review")</code></pre>
+          <p>
+            这是 LangGraph 的 <code class="inline">Command</code> 用法：节点既 <code class="inline">update</code> state 又 <code class="inline">goto</code> 下一个节点，
+            比 <code class="inline">add_conditional_edges</code> 更简洁（<a href="https://docs.langchain.com/oss/python/langgraph/graph-api#command">LangGraph Command</a>）。
+            决策：<strong>evidence 不足 &amp; 还能再扩 &amp; 不是 full_document &amp; 启用了 LLM</strong>，才走 <code class="inline">widen_review_scope</code>；否则直接 <code class="inline">format_review</code>。
+          </p>
+        </div>
+      </details>
+      <details class="acc">
+        <summary>5) <code class="inline">widen_review_scope</code> · 把章节范围扩到 9 节（cover / toc / foreword / scope / ... / end）</summary>
+        <div class="body">
+          <code class="inline">partial_mode = "full_document"</code>，<code class="inline">active_scope_keys</code> 扩成 9 节，<code class="inline">insufficient_scopes</code> 清空，<code class="inline">review_round + 1</code>。
+          警告文本会列出每个被扩的 scope。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>6) <code class="inline">reload_review_rules</code> · 重新检索（复用 retrieve 节点代码 <code class="inline">retrieve_for_widen</code>）</summary>
+        <div class="body">
+          重新跑一遍 FAISS 检索但只筛 <code class="inline">analysis_mode=="full_document"</code> 和 scope 匹配的规则；写 <code class="inline">reloaded_for_round</code> meta。
+          注意：<code class="inline">reload_review_rules</code> 跑完后 <strong>没有</strong>再到 <code class="inline">quality_gate</code>，而是直接 <code class="inline">add_edge("reload_review_rules", "judge_rules")</code> 重新判 → <code class="inline">quality_gate</code> 决定是否再 loop。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>7) <code class="inline">format_review</code> · 格式轨（确定性）</summary>
+        <div class="body">
+          源文件扩展名检查 → 走 <code class="inline">parse_word_file</code> / <code class="inline">parse_pdf_format_file</code> 抽取 <code class="inline">format_facts</code> →
+          <code class="inline">run_format_source_audit</code> 执行 5 个确定性检查：
+          <code class="inline">_check_chapter_numbering / _check_clause_depth_and_title_consistency / _check_dangling_paragraphs / _check_list_item_markers / _check_toc_page_consistency</code>。
+          把 <code class="inline">AuditIssue</code> 通过 <code class="inline">_source_audit_issue_to_review_issue</code> 映射到 <code class="inline">ReviewIssue</code>（统一中度 / 严重 → critical / major / minor / info 翻译）。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>8) <code class="inline">aggregate</code> · 按 (track, scope) 桶汇总</summary>
+        <div class="body">
+          对所有 <code class="inline">issues</code> 按 <code class="inline">f"{track}::{scope}"</code> 桶化，统计 <code class="inline">total/pass/warn/fail/insufficient</code>，写
+          <code class="inline">scope_summary</code> + <code class="inline">aggregate_summary</code>（含 <code class="inline">by_severity / by_track / by_scope</code> 三维分布）。
+          失败条件：<code class="inline">state.errors</code> 非空 → <code class="inline">status="failed"</code>。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>9) <code class="inline">write_outputs</code> · 落盘 3 件套 + 可选 LLM 摘要</summary>
+        <div class="body">
+          写 <code class="inline">&lt;stem&gt;_audit_report.md</code> / <code class="inline">&lt;stem&gt;_audit_result.json</code> / <code class="inline">&lt;stem&gt;_audit_trace.json</code>。
+          <strong>关键</strong>：<code class="inline">_maybe_audit_summary</code> 在 <code class="inline">config.enable_audit_summary=True</code> 时调
+          <code class="inline">generate_audit_summary(issues, ...)</code> 生成 LLM 摘要（<strong>fallback</strong> 到确定性摘要）。摘要限定 <code class="inline">summary_max_chars</code>，并取前 6 项
+          <code class="inline">key_risks / top_fixes / insufficient</code>。
+        </div>
+      </details>
+      <details class="acc">
+        <summary>10) <code class="inline">write_manifest</code> · ArtifactManifest（4 件套）</summary>
+        <div class="body">
+          把 <code class="inline">report / result / trace / manifest</code> 登记为 <code class="inline">ArtifactRef</code>，primary 指向 report。
+          追加 <code class="inline">trace_id / job_id / inputs / rules / audit_summary / scope_summary</code> 等 trace 关联字段。
+        </div>
+      </details>
+
+      <h3>23.4 节点事件流（<a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/events.py">events.py</a>）</h3>
+      <p><code class="inline">events.py</code> 集中管理标准审核的流式事件：</p>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\graphs\standard_review\events.py · <span class="ln">emit_event</span></pre>
+      <pre class="language-python"><code class="language-python">LEGACY_EVENT_TO_REVIEW_TYPE = {
+    ("ingest", "started"):  "review.ingest.started",
+    ("judge_rules", "success"): "review.judge.success",
+    ("quality_gate", "widen"):  "review.quality_gate.widen",
+    ("widen_review_scope", "success"): "review.widen.success",
+    ("format_review", "skipped"): "review.format.skipped",
+    ("aggregate", "success"): "review.aggregate.success",
+    ("write_outputs", "success"): "review.report.written",
+    ("write_manifest", "success"): "review.manifest.written",
+    ...
+}
+
+def emit_event(state, node, status, extra=None) -> dict[str, Any]:
+    payload = {
+        "trace_id": state.get("trace_id", ""),
+        "job_id": state.get("job_id", ""),
+        "component": "standard_review_graph",
+        "node": node, "event": node, "status": status,
+        "created_at": utc_now_iso(),
+        **(extra or {}),
+    }
+    emit_stream_event(review_event_type(node, status),  # 双通道：写 state + 推流
+                      trace_id=..., component="standard_review_graph", ..., **payload)
+    return payload</code></pre>
+      <p><strong>双通道</strong>：写 <code class="inline">state["trace_events"].append(payload)</code> + 通过
+        <code class="inline">emit_stream_event(...)</code> 推 <code class="inline">review.*</code> SSE。返回 dict 与旧
+        <code class="inline">_event</code> 完全同构，<strong>不破坏</strong> reviewer subagent / report.json / trace.json 的现有消费者。</p>
+
+      <h3>23.5 两个子图对比</h3>
+      <table>
+        <thead><tr><th>维度</th><th>metadata_extraction</th><th>standard_review</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>节点数</td>
+            <td>7（全线性）</td>
+            <td>10 + 1 Command 节点（<strong>含 1 条回路</strong>）</td>
+          </tr>
+          <tr>
+            <td>外部 LLM 调用</td>
+            <td>1 次（<code class="inline">run_langextract</code>）</td>
+            <td>1+N 次（<code class="inline">judge.run_dual_route</code> 内 asyncio.gather 多 plan + 可选 <code class="inline">audit_summary</code>）</td>
+          </tr>
+          <tr>
+            <td>状态反馈</td>
+            <td><code class="inline">status</code> 单值</td>
+            <td><code class="inline">status / final_status / review_round / widened / insufficient_scopes</code> 多维</td>
+          </tr>
+          <tr>
+            <td>回路控制</td>
+            <td>无</td>
+            <td><code class="inline">quality_gate → widen_review_scope → reload_review_rules → judge_rules</code>，最多 <code class="inline">max_review_rounds</code> 轮</td>
+          </tr>
+          <tr>
+            <td>流事件</td>
+            <td><code class="inline">meta.*</code> 命名空间</td>
+            <td><code class="inline">review.*</code> 命名空间 + 双通道（state + SSE）</td>
+          </tr>
+          <tr>
+            <td>产物</td>
+            <td>3 件套（metadata / annotated / normalized） + manifest</td>
+            <td>4 件套（report / result / trace / manifest）</td>
+          </tr>
+          <tr>
+            <td>回路失败容忍</td>
+            <td>—</td>
+            <td><code class="inline">max_review_rounds</code> 限制扩域次数；<code class="inline">_fallback_issue</code> 把 LLM 异常降级为 <code class="inline">status="insufficient_context"</code> issue</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>23.6 子图从哪里被调用</h3>
+      <p>两个子图都被 <a href="file:///d:/deep-agents/src/standard_document_assistant/tools/__init__.py"><code class="inline">tools/__init__.py</code></a> 中的业务工具包装，由 SubAgent 通过内置 <code class="inline">task</code> 委派：</p>
+      <table>
+        <thead><tr><th>子图</th><th>包装工具</th><th>暴露给</th><th>调用形式</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>metadata_extraction</td>
+            <td><code class="inline">extract_standard_metadata</code>（<a href="file:///d:/deep-agents/src/standard_document_assistant/tools/metadata.py">tools/metadata.py</a>）</td>
+            <td>extractor subagent</td>
+            <td><code class="inline">get_metadata_extraction_graph().invoke(state, config=..., context=...)</code></td>
+          </tr>
+          <tr>
+            <td>standard_review</td>
+            <td><code class="inline">run_standard_review</code>（<a href="file:///d:/deep-agents/src/standard_document_assistant/tools/review.py">tools/review.py</a>）</td>
+            <td>reviewer subagent</td>
+            <td><code class="inline">get_standard_review_graph().invoke(state, config=..., context=...)</code></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted small">Tool → SubGraph 的横切关注点（trace_id / cover_metadata_hint / quality_strict）通过 <a href="file:///d:/deep-agents/src/standard_document_assistant/tracing.py"><code class="inline">tracing.py:invoke_traced_graph</code></a> 统一透传。</p>
+    </section>
+
+    <section id="review-detail">
+      <h2>24. 标准审核的代码实现、逻辑与算法（精读）</h2>
+      <p>本节逐层拆解标准审核<strong>业务</strong>的代码：<strong>6 层流水线</strong>（解析 → 章节分类 → 知识库 → 检索 → LLM 判定 → 报告），
+        以及质量门、扩域回路、格式轨等<strong>控制机制</strong>。所有代码均来自
+        <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/"><code class="inline">graphs/standard_review/</code></a>
+        和
+        <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/"><code class="inline">review_core/</code></a>。</p>
+
+      <h3>24.1 算法 6 层流水线</h3>
+      <div class="diagram">
+        <svg viewBox="0 0 1080 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="审核算法 6 层流水线">
+          <defs>
+            <linearGradient id="l1" x1="0" x2="1"><stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#7c5bff"/></linearGradient>
+            <linearGradient id="l2" x1="0" x2="1"><stop offset="0" stop-color="#7c5bff"/><stop offset="1" stop-color="#818cf8"/></linearGradient>
+            <linearGradient id="l3" x1="0" x2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#2dd4bf"/></linearGradient>
+            <linearGradient id="l4" x1="0" x2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#22c55e"/></linearGradient>
+            <linearGradient id="l5" x1="0" x2="1"><stop offset="0" stop-color="#22c55e"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+            <linearGradient id="l6" x1="0" x2="1"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#f43f5e"/></linearGradient>
+            <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="#97a3c4"/>
+            </marker>
+          </defs>
+          <g font-size="13" fill="#fff" font-weight="600">
+            <rect x="20"  y="120" width="160" height="120" rx="14" fill="url(#l1)"/>
+            <text x="100" y="160" text-anchor="middle">① 文档解析</text>
+            <text x="100" y="180" text-anchor="middle" font-size="11" font-weight="400">doc_parser.py</text>
+            <text x="100" y="200" text-anchor="middle" font-size="11" font-weight="400">Markdown 章节切分</text>
+
+            <rect x="200" y="120" width="160" height="120" rx="14" fill="url(#l2)"/>
+            <text x="280" y="160" text-anchor="middle">② Scope 归一化</text>
+            <text x="280" y="180" text-anchor="middle" font-size="11" font-weight="400">scopes.py</text>
+            <text x="280" y="200" text-anchor="middle" font-size="11" font-weight="400">13 个标准章节</text>
+
+            <rect x="380" y="120" width="160" height="120" rx="14" fill="url(#l3)"/>
+            <text x="460" y="160" text-anchor="middle">③ 规则知识库</text>
+            <text x="460" y="180" text-anchor="middle" font-size="11" font-weight="400">knowledge_base.py</text>
+            <text x="460" y="200" text-anchor="middle" font-size="11" font-weight="400">FAISS / TF-IDF</text>
+
+            <rect x="560" y="120" width="160" height="120" rx="14" fill="url(#l4)"/>
+            <text x="640" y="160" text-anchor="middle">④ 检索</text>
+            <text x="640" y="180" text-anchor="middle" font-size="11" font-weight="400">retrieve.py</text>
+            <text x="640" y="200" text-anchor="middle" font-size="11" font-weight="400">scope → top_k → dedup</text>
+
+            <rect x="740" y="120" width="160" height="120" rx="14" fill="url(#l5)"/>
+            <text x="820" y="160" text-anchor="middle">⑤ LLM Judge</text>
+            <text x="820" y="180" text-anchor="middle" font-size="11" font-weight="400">llm_judge.py</text>
+            <text x="820" y="200" text-anchor="middle" font-size="11" font-weight="400">4 策略 + 并发</text>
+
+            <rect x="920" y="120" width="140" height="120" rx="14" fill="url(#l6)"/>
+            <text x="990" y="160" text-anchor="middle">⑥ 报告</text>
+            <text x="990" y="180" text-anchor="middle" font-size="11" font-weight="400">report.py</text>
+            <text x="990" y="200" text-anchor="middle" font-size="11" font-weight="400">report+result+trace</text>
+          </g>
+          <g stroke="#97a3c4" stroke-width="1.5" fill="none">
+            <line x1="180" y1="180" x2="200" y2="180" marker-end="url(#arr3)"/>
+            <line x1="360" y1="180" x2="380" y2="180" marker-end="url(#arr3)"/>
+            <line x1="540" y1="180" x2="560" y2="180" marker-end="url(#arr3)"/>
+            <line x1="720" y1="180" x2="740" y2="180" marker-end="url(#arr3)"/>
+            <line x1="900" y1="180" x2="920" y2="180" marker-end="url(#arr3)"/>
+          </g>
+          <!-- quality gate + widen loop overlay -->
+          <path d="M 820 240 C 820 290, 460 290, 460 240" stroke="#f59e0b" stroke-dasharray="6,3" fill="none" marker-end="url(#arr3)"/>
+          <text x="640" y="304" text-anchor="middle" fill="#fde2b0" font-size="12">quality_gate → widen → reload → judge（最多 max_review_rounds 轮）</text>
+        </svg>
+      </div>
+
+      <h3>24.2 第 1 层：文档解析 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/doc_parser.py"><code class="inline">doc_parser.py</code></a></h3>
+      <p><strong>输入</strong>：MinerU 输出的 Markdown 全文。
+        <strong>输出</strong>：<code class="inline">ParsedMarkdownDocument</code>，含 13 个 scope 字段 + 行号区间。</p>
+
+      <h4>核心数据类</h4>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\review_core\doc_parser.py · <span class="ln">ParsedMarkdownDocument</span></pre>
+      <pre class="language-python"><code class="language-python">@dataclass
+class ParsedMarkdownDocument:
+    file_name: str; raw_text: str
+    cover_text: str; toc_text: str; body_text: str
+    lines: List[str]
+    cover_line_start: int | None; cover_line_end: int | None
+    toc_line_start: int | None;   toc_line_end: int | None
+    # 13 个 scope 章节正文
+    foreword_text: str; introduction_text: str
+    scope_text: str; normative_references_text: str
+    terms_definitions_text: str; symbols_abbreviations_text: str
+    other_body_text: str; appendix_text: str
+    index_text: str; references_text: str; end_text: str
+    section_chunks: List[DocumentSectionChunk]   # 含 line_start / line_end
+    source_type: str = "markdown"               # markdown / docx / pdf
+    text_view: str = ""
+    format_facts: List[dict] = field(default_factory=list)   # 仅 docx / pdf
+    source_locations: Dict[str, dict] = field(default_factory=dict)</code></pre>
+
+      <h4>解析算法（<code class="inline">parse_markdown_text</code>）</h4>
+      <ol>
+        <li><strong>定位目次</strong>：<code class="inline">_find_toc_start</code> 扫前 ~30 行找 "目次" / "目录" 标题。命中后：
+          <code class="inline">[0, toc_idx)</code> 是封面，<code class="inline">[toc_idx, body_start)</code> 是目次。</li>
+        <li><strong>定位正文起点</strong>：<code class="inline">_is_body_start_line</code> 同时要求
+          <strong>(a) 标题或编号格式</strong> 且
+          <strong>(b) 章节名被分类器识别</strong>（foreword / scope / normative_references 等 9 类之一），
+          并且<strong>不是目次条目</strong>（首列无空格、宽度 < 30）。</li>
+        <li><strong>章节切分</strong>：<code class="inline">_split_body_chunks</code> 找所有 <code class="inline">_is_chunk_heading</code> 行号；
+          连续两个 heading 之间的内容属前一个 chunk。每 chunk 计算 <code class="inline">line_start / line_end</code>，分类到 <code class="inline">scope</code>。</li>
+        <li><strong>章节名 → scope</strong>：<code class="inline">_classify_heading</code> 基于中文字面（"范围"→scope、"规范性引用文件"→normative_references、"术语和定义"→terms_definitions 等）。
+          未知 scope 归为 <code class="inline">other_body</code>；appendices（附录 / 索引 / 参考文献）一类
+          <strong>不被收进 body_text</strong>，单独进 <code class="inline">appendix_text / index_text / references_text / end_text</code>。</li>
+        <li><strong>body_text 过滤</strong>：<code class="inline">_build_body_text</code> 只保留 <code class="inline">{scope, normative_references, terms_definitions, symbols_abbreviations, other_body}</code>，
+          且只保留 <code class="inline">order ≥ first_scope_order</code> 的 chunks（确保不含前言、引言）。</li>
+        <li><strong>结果装配</strong>：返回 <code class="inline">ParsedMarkdownDocument</code>，每个 scope 字段、<code class="inline">section_chunks</code>（带行号）、行号区间都填好。</li>
+      </ol>
+
+      <details class="acc">
+        <summary>章节分类 _classify_heading 完整规则（doc_parser.py）</summary>
+        <div class="body">
+          <ul>
+            <li>scope ∈ {foreword, introduction, scope, normative_references, terms_definitions, symbols_abbreviations, appendix, index, references}</li>
+            <li>判定关键词：<code class="inline">"前言"→foreword</code>、<code class="inline">"引言"→introduction</code>、<code class="inline">"范围"→scope</code>、<code class="inline">"规范性引用"/"引用文件"→normative_references</code>、<code class="inline">"术语"/"定义"→terms_definitions</code>、<code class="inline">"符号"/"缩略语"→symbols_abbreviations</code>、<code class="inline">"附录"→appendix</code>、<code class="inline">"参考文献"→references</code>、<code class="inline">"索引"→index</code></li>
+            <li>出现 <code class="inline">"目次"/"目录"</code> 直接被排除（<code class="inline">_is_body_start_line</code> 显式拒绝）</li>
+            <li>不在任何类 → <code class="inline">other_body</code></li>
+          </ul>
+        </div>
+      </details>
+
+      <h3>24.3 第 2 层：Scope 归一化 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/scopes.py"><code class="inline">scopes.py</code></a></h3>
+
+      <h4>2.1 中英文 → 标准 key 的别名表</h4>
+      <pre class="file-ref">d:\deep-agents\src\standard_document_assistant\review_core\scopes.py · <span class="ln">SCOPE_ALIASES</span></pre>
+      <pre class="language-python"><code class="language-python">SCOPE_ALIASES = {
+    "范围": "scope", "scope": "scope",
+    "引用文件": "normative_references", "规范性引用": "normative_references",
+    "normative_references": "normative_references",
+    "术语": "terms_definitions", "术语和定义": "terms_definitions",
+    "符号和缩略语": "symbols_abbreviations",
+    "前言": "foreword", "引言": "introduction",
+    "目次": "toc", "目录": "toc", "封面": "cover",
+    "正文": "other_body", "body": "other_body",
+    "附录": "appendix", "参考文献": "references", "索引": "index", "结束": "end",
+}
+
+DEFAULT_REVIEW_SCOPE_ORDER = (
+    "cover", "toc", "foreword", "introduction", "scope", "normative_references",
+    "terms_definitions", "symbols_abbreviations", "other_body",
+    "appendix", "references", "index", "end",
+)</code></pre>
+
+      <h4>2.2 <code class="inline">restrict_document</code> · 审核视图</h4>
+      <p>把完整 <code class="inline">ParsedMarkdownDocument</code> 缩为"只包含 active scopes"的"审核视图"：</p>
+      <pre class="language-python"><code class="language-python">def restrict_document(document, active_scope_keys, partial_mode) -> ParsedMarkdownDocument:
+    """partial_mode == "full_document" 时把 13 个 scope 按 DEFAULT_REVIEW_SCOPE_ORDER 全部拼；否则按 keys 拼。"""
+    keys = list(dict.fromkeys(active_scope_keys))
+    if partial_mode == "full_document" or not keys:
+        view = "\n\n".join((getattr(document, f"{key}_text", "") or "").strip() for key in DEFAULT_REVIEW_SCOPE_ORDER)
+    else:
+        view = "\n\n".join(f"# {key}\n{(getattr(document, f'{key}_text', '') or '').strip()}" for key in keys)
+    new_doc = ParsedMarkdownDocument(file_name=document.file_name, raw_text=view, ...)
+    new_doc.text_view = view
+    return new_doc</code></pre>
+      <p class="muted small">视图构造时把所有未在 keys 里的 scope 字段置空，避免 LLM 看到无关正文。</p>
+
+      <h4>2.3 <code class="inline">filter_rules_for_partial_mode</code> · 规则过滤</h4>
+      <pre class="language-python"><code class="language-python">def filter_rules_for_partial_mode(rules, partial_mode, active_keys, *, include_full_document_scope=True):
+    """按分析模式 × active_keys 三维过滤：local/cross_section 仅当 target_scopes 与 active_keys 交集非空。"""
+    if partial_mode == "full_document":
+        return list(rules)            # full 模式不筛
+    keys = set(active_keys)
+    filtered = []
+    for rule in rules:
+        if rule.analysis_mode == "local" or rule.analysis_mode == "cross_section":
+            if rule.target_scopes and keys.intersection(rule.target_scopes):
+                filtered.append(rule)
+        elif rule.analysis_mode == "full_document":
+            if include_full_document_scope:
+                filtered.append(rule)
+        else:
+            filtered.append(rule)
+    return filtered</code></pre>
+
+      <h4>2.4 <code class="inline">expand_cross_section_scope_keys</code> · 自动扩域</h4>
+      <p>对于 <code class="inline">analysis_mode=="cross_section"</code> 的规则，自动把它需要的 scope 加入审核范围 + 警告，避免漏审跨节规则。</p>
+
+      <h3>24.4 第 3 层：规则知识库 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/knowledge_base.py"><code class="inline">knowledge_base.py</code></a> + <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/retrievers/vector_retriever.py"><code class="inline">retrievers/vector_retriever.py</code></a></h3>
+
+      <h4>3.1 规则数据类 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/rule_models.py"><code class="inline">rule_models.py</code></a></h4>
+      <pre class="language-python"><code class="language-python">@dataclass
+class RuleItem:
+    chunk_id: str           # 唯一 ID, "RAG-0001"
+    title: str              # "范围章节完整性"
+    scope: str              # "scope" | "full_document" | "format" | ...
+    content: str            # 规则正文
+    source_ref: str         # "rules_test.md#范围章节完整性-p1"
+    tags: List[str]
+    analysis_mode: str      # "local" | "cross_section" | "full_document" | "deterministic" | "format_only"
+    target_scopes: List[str]   # 本规则适用的章节列表
+
+    def retrieval_text(self) -> str:
+        """retrieval_text 把 title + content + scope + analysis_mode + target_scopes + tags 拼成检索串"""
+        return f"{self.title}\n{self.content}\n{self.scope}\n{self.analysis_mode}\n{' '.join(self.target_scopes)}\n{' '.join(self.tags)}"</code></pre>
+
+      <h4>3.2 知识库加载策略 <code class="inline">load_knowledge_base</code></h4>
+      <div class="diagram">
+        <svg viewBox="0 0 1080 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="知识库加载">
+          <defs>
+            <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="#97a3c4"/>
+            </marker>
+          </defs>
+          <g font-size="12" fill="#e6ecff">
+            <rect x="20"  y="80" width="140" height="60" rx="10" fill="#1c2549" stroke="#2a3563"/>
+            <text x="90"  y="106" text-anchor="middle">force_rebuild?</text>
+            <text x="90"  y="124" text-anchor="middle" fill="#97a3c4">state / config.auto</text>
+
+            <rect x="200" y="20"  width="180" height="60" rx="10" fill="#1c2549" stroke="#2a3563"/>
+            <text x="290" y="46"  text-anchor="middle">阶段 1：磁盘加载</text>
+            <text x="290" y="64"  text-anchor="middle" fill="#97a3c4">三件套 FAISS → JSON TF-IDF</text>
+
+            <rect x="200" y="120" width="180" height="60" rx="10" fill="#1c2549" stroke="#2a3563"/>
+            <text x="290" y="146" text-anchor="middle">阶段 2：从 markdown 重建</text>
+            <text x="290" y="164" text-anchor="middle" fill="#97a3c4">from_markdown → build_faiss / JSON</text>
+
+            <rect x="420" y="20"  width="180" height="60" rx="10" fill="#1c2549" stroke="#2a3563"/>
+            <text x="510" y="46"  text-anchor="middle">优先级：FAISS &gt; JSON &gt; memory</text>
+            <text x="510" y="64"  text-anchor="middle" fill="#97a3c4">ImportError / FileNotFound / Stale 降级</text>
+
+            <rect x="420" y="120" width="180" height="60" rx="10" fill="#1c2549" stroke="#2a3563"/>
+            <text x="510" y="146" text-anchor="middle">_is_stale 比对 rules.md mtime</text>
+            <text x="510" y="164" text-anchor="middle" fill="#97a3c4">修改规则后下次调用自动重建</text>
+
+            <rect x="640" y="60" width="200" height="80" rx="10" fill="#2dd4bf" opacity="0.15" stroke="#2dd4bf"/>
+            <text x="740" y="86"  text-anchor="middle" fill="#b8f0e6">返回 (kb, kb_meta)</text>
+            <text x="740" y="104" text-anchor="middle" fill="#b8f0e6" font-size="10">index_source / index_backend</text>
+            <text x="740" y="122" text-anchor="middle" fill="#b8f0e6" font-size="10">rules_loaded / rules_hash</text>
+          </g>
+          <g stroke="#97a3c4" stroke-width="1.4" fill="none">
+            <line x1="160" y1="110" x2="200" y2="50"  marker-end="url(#arr4)"/>
+            <line x1="160" y1="110" x2="200" y2="150" marker-end="url(#arr4)"/>
+            <line x1="380" y1="50"  x2="420" y2="50"  marker-end="url(#arr4)"/>
+            <line x1="380" y1="150" x2="420" y2="150" marker-end="url(#arr4)"/>
+            <line x1="600" y1="50"  x2="640" y2="80"  marker-end="url(#arr4)"/>
+            <line x1="600" y1="150" x2="640" y2="120" marker-end="url(#arr4)"/>
+          </g>
+        </svg>
+      </div>
+
+      <h4>3.3 FAISS 检索器 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/retrievers/vector_retriever.py"><code class="inline">FaissVectorRetriever</code></a></h4>
+      <ul>
+        <li><strong>向量化</strong>：<code class="inline">TfidfVectorizer(token_pattern=r"(?u)\b\w+\b")</code>（<a href="https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html">sklearn</a>）把 <code class="inline">rule.retrieval_text()</code> 拟成 TF-IDF 矩阵；
+          <code class="inline">_l2_normalize</code> 把稀疏行归一化为单位向量（cos 等价内积）。</li>
+        <li><strong>索引</strong>：<code class="inline">faiss.IndexFlatIP(vectors.shape[1])</code>（<a href="https://faiss.ai/index.html">faiss</a>）。</li>
+        <li><strong>三件套持久化</strong>：<code class="inline">rules.faiss</code>（faiss.write_index）+ <code class="inline">rules.faiss.meta.json</code>（chunk_id_map + rules dict）+ <code class="inline">tfidf_vectorizer.pkl</code>（pickle vectorizer）。</li>
+        <li><strong>检索</strong>：<code class="inline">index.search(query_vec, top_k*3)</code>，再做 <code class="inline">context.scope</code> 过滤（只保留 <code class="inline">rule.scope==context.scope</code> 的结果），最后取前 <code class="inline">top_k</code>。</li>
+        <li><strong>缓存</strong>：<code class="inline">_faiss_retriever: dict[index_dir → retriever]</code>，单次图执行内不重复反序列化。</li>
+      </ul>
+
+      <h4>3.4 纯 Python TF-IDF 兜底 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/retriever.py"><code class="inline">retriever.py</code></a></h4>
+      <p>当 <code class="inline">faiss-cpu</code> 不可用时退到 <code class="inline">build_tfidf_index</code> + <code class="inline">search_index</code>：
+        按规则文档 token 化 → 计算 <code class="inline">idf = log((1+N)/(1+df))+1</code> → 对每个规则构造 dim 维向量 → 检索时计算 <code class="inline">_cosine</code>。</p>
+
+      <h3>24.5 第 4 层：检索 <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/retrieve.py"><code class="inline">retrieve.py</code></a></h3>
+      <p>完整算法流程：</p>
+      <pre class="language-python"><code class="language-python">def retrieve_rules(state, runtime=None) -> dict:
+    # 1. 加载知识库（FAISS 优先，回退 JSON）
+    kb, kb_meta = load_knowledge_base(config, force_rebuild=force)
+    rules = filter_content_audit_rules(kb.rules)   # 排除 format / format_only
+
+    # 2. 确定 active_keys
+    active_keys = list(state.get("active_scope_keys") or [])
+    if partial_mode == "full_document":
+        active_keys = [13 个标准 scope]
+    if requested := normalize_scope_keys(state.get("target_scopes")):
+        active_keys = [k for k in active_keys if k in set(requested)] or active_keys
+
+    # 3. 对每个 active_key 检索 top_k
+    section_rules, section_rule_dicts, retrieval_trace = [], [], []
+    seen_ids: set[str] = set()
+    for scope_key in active_keys:
+        hits = kb.search(scope_key, scope=scope_key, top_k=top_k, index_dir=index_dir)
+        for hit in hits:
+            if hit.rule.chunk_id in seen_ids:               # 去重
+                continue
+            if hit.rule.analysis_mode == "full_document":   # full 规则单独入 full_document_rules
+                continue
+            if hit.rule.target_scopes and scope_key not in hit.rule.target_scopes:
+                if hit.rule.scope != scope_key:
+                    continue
+            seen_ids.add(hit.rule.chunk_id)
+            section_rules.append(hit.rule)
+            section_rule_dicts.append(_rule_to_dict(hit.rule, matched_scope=scope_key))
+        retrieval_trace.append({"scope": scope_key, "top_k": top_k,
+                                "rule_ids": [h.rule.chunk_id for h in hits],
+                                "query": f"scope:{scope_key}"})
+
+    # 4. full_document 规则单独收集（所有 analysis_mode=="full_document" 的规则都进）
+    full_doc_rules = [r for r in rules if r.analysis_mode == "full_document"]
+
+    return {
+        "section_rules": section_rule_dicts,
+        "full_document_rules": [...],
+        "section_rule_objects": section_rule_dicts,         # 留给 judge 反序列化
+        "full_document_rule_objects": [...],
+        "retrieval_trace": retrieval_trace,
+        "rules_metadata": {**kb_meta, "section_rules_count": ..., "full_document_rules_count": ...},
+    }</code></pre>
+
+      <h3>24.6 第 5 层：LLM Judge 多策略 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/llm_judge.py"><code class="inline">llm_judge.py</code></a></h3>
+
+      <h4>5.1 系统提示词（<code class="inline">_JUDGE_SYSTEM_PROMPT</code>）</h4>
+      <p>强制 LLM 仅输出 JSON：<code class="inline">pass / severity_level / actual / evidence_text / suggestion / reasoning / confidence</code>。
+        <strong>关键阈值</strong>：<code class="inline">confidence &lt;= 0.4 + status='insufficient_context'</code> 触发扩域回路；&gt; <code class="inline">low_confidence_floor</code> 才算 fail。</p>
+
+      <h4>5.2 4 种 LLM 策略</h4>
+      <table>
+        <thead>
+          <tr><th>策略</th><th>触发</th><th>Prompt 模板</th><th>适用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code class="inline">single</code></td>
+          <td><code class="inline">analysis_mode=="local"</code> 且 ctx ≤ <code class="inline">batch_scope_max_chars</code></td>
+          <td>1 条规则 + 1 段精确上下文</td>
+          <td>最常见，覆盖 scope / terms / 引用文件 等单节规则</td></tr>
+          <tr><td><code class="inline">window</code></td>
+          <td><code class="inline">local</code> 且 ctx &gt; <code class="inline">batch_scope_max_chars</code></td>
+          <td>1 条规则 + 关联规则列表 + 窗口上下文</td>
+          <td>长规则 / 需要交叉验证的规则</td></tr>
+          <tr><td><code class="inline">cross_section</code></td>
+          <td><code class="inline">analysis_mode=="cross_section"</code></td>
+          <td>1 条规则 + 跨多节上下文</td>
+          <td>同时检查"范围 + 规范性引用"等多节的规则</td></tr>
+          <tr><td><code class="inline">full_document</code></td>
+          <td><code class="inline">analysis_mode=="full_document"</code></td>
+          <td>1 条规则 + 全文（截断 <code class="inline">local_context_max_chars</code>）</td>
+          <td>全文级结构 / 编号 / 目次规则</td></tr>
+        </tbody>
+      </table>
+      <p>策略选择代码：</p>
+      <pre class="language-python"><code class="language-python">def _choose_strategy(self, rule: RuleItem, context_len: int) -> str:
+    if rule.analysis_mode == "full_document":   return "full_document"
+    if rule.analysis_mode == "cross_section":  return "cross_section"
+    if rule.analysis_mode == "deterministic":  return "skip"     # 确定性规则不走 LLM
+    if context_len < self.config.min_context_chars_local:  return "skip"   # 上下文不足，不审
+    if rule.analysis_mode == "local" and context_len > self.config.batch_scope_max_chars:
+        return "window"
+    return "single"</code></pre>
+
+      <h4>5.3 上下文构建 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/context_chunker.py"><code class="inline">context_chunker.py</code></a></h4>
+      <p><code class="inline">DocumentContextBuilder.build_rule_context</code> 三步：</p>
+      <ol>
+        <li><strong>顺序化</strong>：<code class="inline">_ordered_units</code> 把 cover / toc / section_chunks 拼成统一列表，每项带 order / scope / heading / line_start / line_end / text。</li>
+        <li><strong>选择</strong>：<code class="inline">_select_relevant_chunks</code> 对 body scopes 优先（scope / normative_references / terms_definitions / symbols_abbreviations / other_body），
+          若 <code class="inline">target_scopes</code> 不在 body scopes 就跳过；都不命中时退回 front_matter（foreword / introduction）；再退回 end scopes（appendix / index / references / end）。
+          累计到 <code class="inline">local_context_max_chars</code> 截断。</li>
+        <li><strong>关联规则</strong>：window 策略需要 <code class="inline">related_rules</code>，从其他 chunk 命中且 chunk_id 相邻的规则中取。</li>
+      </ol>
+
+      <h4>5.4 <code class="inline">arun_dual_route</code> · 并发执行</h4>
+      <pre class="language-python"><code class="language-python">async def arun_dual_route(self, plans, *, file_name, trace_id) -> list[JudgeOutcome]:
+    sem = asyncio.Semaphore(max(1, int(self.config.judge_max_workers)))   # 限并发
+    tasks = [self._judge_with_sem(sem, plan, file_name=file_name, trace_id=trace_id) for plan in plans]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # return_exceptions=True：单个 plan 失败不污染其他；转为 _fallback_issue
+
+async def _judge_with_sem(self, sem, plan, *, file_name, trace_id) -> JudgeOutcome:
+    async with sem:
+        writer = get_stream_writer()                 # 推 "scope_progress" 事件
+        writer({"type": "scope_progress", "rule": plan.rule.chunk_id, "strategy": plan.strategy})
+        try:
+            payload = await self._invoke_strategy(plan)
+        except Exception as exc:
+            writer({"type": "judge_error", "rule": plan.rule.chunk_id, "error": str(exc)})
+            return JudgeOutcome(..., issue=self._fallback_issue(plan, file_name=trace_id, error=str(exc)), raw="")
+        return JudgeOutcome(rule=plan.rule, strategy=plan.strategy, issue=self._build_issue(plan, payload, file_name=file_name), raw=json.dumps(payload, ensure_ascii=False))</code></pre>
+      <p><strong>降级</strong>：LLM 异常 → <code class="inline">_fallback_issue(plan, status="insufficient_context")</code>，issue_id 后缀 <code class="inline">-fallback</code>，<code class="inline">confidence=0.1</code>，<code class="inline">llm_reasoning="异常降级"</code>。</p>
+
+      <h4>5.5 <code class="inline">_build_issue</code> · 从 LLM JSON 到 AuditIssue</h4>
+      <pre class="language-python"><code class="language-python">def _build_issue(self, plan, payload, *, file_name) -> AuditIssue | None:
+    if not payload:                                return _fallback_issue(status="insufficient_context")
+    if bool(payload.get("pass")):                  return None   # 通过就不产生 issue
+    confidence = float(payload.get("confidence", 0.0))
+    status = "fail" if confidence > self.config.low_confidence_floor else "insufficient_context"
+    return AuditIssue(
+        issue_id=f"{plan.rule.chunk_id}-{file_name}",
+        severity=str(payload.get("severity_level") or "中度"),
+        status=status,                              # fail / insufficient_context
+        expected=plan.rule.content,                 # 期望：规则原文
+        actual=str(payload.get("actual") or "..."),
+        evidence_text=str(payload.get("evidence_text") or ""),
+        source_ref=plan.rule.source_ref,
+        suggestion=str(payload.get("suggestion") or ""),
+        confidence=confidence,
+        llm_reasoning=str(payload.get("reasoning") or ""),
+    )</code></pre>
+      <p>在 <code class="inline">extras["strategy"]</code> 里记录具体走了哪种策略，便于审计回溯。</p>
+
+      <h3>24.7 第 6 层：质量门 + 扩域回路 <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/review.py"><code class="inline">review.py</code></a></h3>
+
+      <h4>6.1 <code class="inline">quality_gate</code> 决策矩阵</h4>
+      <table>
+        <thead>
+          <tr><th>条件</th><th>下一节点</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code class="inline">format_only == True</code></td><td><code class="inline">format_review</code></td></tr>
+          <tr><td><code class="inline">enable_llm_review == False</code></td><td><code class="inline">format_review</code></td></tr>
+          <tr><td><code class="inline">partial_mode == "full_document"</code></td><td><code class="inline">format_review</code></td></tr>
+          <tr><td><code class="inline">insufficient_scopes == []</code></td><td><code class="inline">format_review</code></td></tr>
+          <tr><td><code class="inline">round_idx ≥ max_rounds</code></td><td><code class="inline">format_review</code></td></tr>
+          <tr><td><strong>以上均不满足</strong></td><td><span class="pill amber">widen_review_scope</span></td></tr>
+        </tbody>
+      </table>
+
+      <h4>6.2 <code class="inline">_scope_coverage_check</code> · 章节存在性检查</h4>
+      <p>对 <code class="inline">section_rule_objects + full_document_rule_objects</code> 的 <code class="inline">target_scopes</code> 并集：
+        若某 target scope 在 <code class="inline">scope_text_map</code> 中为空，则生成 <code class="inline">status="warn"</code> 的 issue，
+        提示"应当存在但缺失"。这是 LLM 之外的<strong>确定性</strong>章节检查，确保 LLM 失败路径也能给出结构化告警。</p>
+
+      <h3>24.8 格式轨 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/format_audit.py"><code class="inline">format_audit.py</code></a></h3>
+      <p><code class="inline">run_format_source_audit</code> 对 DOCX / PDF 源文件做 5 项<strong>确定性</strong>检查：</p>
+      <table>
+        <thead>
+          <tr><th>Rule ID</th><th>检查</th><th>来源</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code class="inline">DOCX-FMT-001</code></td><td>章编号从 1 连续；章标题在编号之后</td><td><a href="file:///d:/deep-agents/src/standard_document_assistant/resources/review_rules/rules_test.md">rules_test.md#格式规范-p1</a></td></tr>
+          <tr><td><code class="inline">DOCX-FMT-002</code></td><td>条编号层次 ≤ 5；同层条标题有无统一</td><td>rules_test.md#格式规范-p2</td></tr>
+          <tr><td><code class="inline">DOCX-FMT-003</code></td><td>章/条标题与下一节之间不设悬置段（术语 / 符号 / 缩略语引导语除外）</td><td>rules_test.md#格式规范-p3</td></tr>
+          <tr><td><code class="inline">DOCX-FMT-004</code></td><td>列项前标破折号 / 间隔号 / 字母 / 数字；同组列项格式统一</td><td>rules_test.md#格式规范-p4</td></tr>
+          <tr><td><code class="inline">DOCX-TOC-001</code></td><td>Word 目次页码 = 正文标题页码</td><td>rules_test.md#格式规范-p6</td></tr>
+        </tbody>
+      </table>
+      <p>每项检查产出 (issues, evaluation)，evaluation 写入 <code class="inline">format_facts.evaluations</code> 给 trace。
+        Word 解析走 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/word_parser.py"><code class="inline">word_parser.py</code></a>（python-docx + lxml），
+        PDF 解析走 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/pdf_format_parser.py"><code class="inline">pdf_format_parser.py</code></a>（pymupdf 抽版式信息）。</p>
+
+      <h3>24.9 聚合、报告、清单</h3>
+
+      <h4>9.1 聚合 <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/aggregate.py"><code class="inline">aggregate.py</code></a></h4>
+      <pre class="language-python"><code class="language-python">def aggregate(state, runtime=None) -> dict:
+    issues = state.get("issues") or []
+    statuses = Counter(item.get("status", "") for item in issues)   # fail / warn / pass / insufficient
+    severities = Counter(item.get("severity", "") for item in issues)
+    tracks = Counter(item.get("audit_track", "") for item in issues)
+    scope_buckets = {}
+    for issue in issues:
+        key = f"{issue.get('audit_track') or 'content_llm'}::{issue.get('scope') or 'full_document'}"
+        bucket = scope_buckets.setdefault(key, {"track": ..., "scope": ..., "total": 0, "fail": 0, "warn": 0, "pass": 0, "insufficient": 0, "issues": []})
+        bucket["total"] += 1
+        status = issue.get("status", "")
+        bucket[status if status in {"pass","warn","fail","insufficient_context"} else "warn"] += 1
+        bucket["issues"].append(issue.get("issue_id", ""))
+    summary = {
+        "total_issues": len(issues),
+        "failed": statuses.get("fail", 0),
+        "warn": statuses.get("warn", 0),
+        "insufficient_context": statuses.get("insufficient_context", 0),
+        "by_severity": dict(severities),
+        "by_track": dict(tracks),
+        "by_scope": {k: {k: v for k, v in b.items() if k != "issues"} for k, b in scope_buckets.items()},
+    }
+    final_status = "success" if not state.get("errors") else "failed"
+    return {"scope_summary": scope_buckets, "aggregate_summary": summary, "status": final_status, "final_status": final_status, ...}</code></pre>
+
+      <h4>9.2 报告 <a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/report.py"><code class="inline">report.py</code></a> + <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/reporter.py"><code class="inline">reporter.py</code></a></h4>
+      <p>写 4 类产物：</p>
+      <ol>
+        <li><strong><code class="inline">_audit_report.md</code></strong>：<code class="inline">render_markdown_report</code> 渲染，含摘要 + 每个 issue 的 9 字段（status / severity / scope / audit_track / rule_id / source_ref / expected / actual / evidence / suggestion）+ 警告列表。</li>
+        <li><strong><code class="inline">_audit_result.json</code></strong>：含完整 <code class="inline">summary / scope_summary / audit_summary / issues / rules / retrieval_trace / format_trace</code>。</li>
+        <li><strong><code class="inline">_audit_trace.json</code></strong>：节点事件 + 回路信息（<code class="inline">review_round / max_review_rounds / widened / partial_mode</code>）。</li>
+        <li><strong><code class="inline">_review_manifest.json</code></strong>：<code class="inline">ArtifactManifest</code>，primary 指向 report。</li>
+      </ol>
+
+      <h4>9.3 LLM 审核摘要 <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/audit_summary.py"><code class="inline">audit_summary.py</code></a></h4>
+      <pre class="language-python"><code class="language-python">def generate_audit_summary(issues, *, file_name, config, client=None) -> AuditSummaryResult | None:
+    if not config.enable_audit_summary:    return None
+    if not issues:
+        return AuditSummaryResult(summary="审核未发现重大问题...", key_risks=[], top_fixes=[], insufficient=[], raw="")
+    # 调 LLM 生成 600 字以内的执行摘要（4 字段：summary / key_risks / top_fixes / insufficient）
+    response = summary_client.chat([SystemMessage(_SUMMARY_SYSTEM_PROMPT), HumanMessage(user_prompt)])
+    payload = safe_json_loads(response) or {}
+    if not payload.get("summary"):         # LLM 不可用时
+        return _offline_summary(issues, raw=response)   # 确定性 fallback：按 severity / scope 分布汇总
+    return AuditSummaryResult(
+        summary=str(payload["summary"])[: config.summary_max_chars],
+        key_risks=[...][:6], top_fixes=[...][:6], insufficient=[...][:6],
+        raw=response,
+    )</code></pre>
+
+      <h3>24.10 一条 issue 的端到端旅程（trace）</h3>
+      <p>用真实路径串一遍最常见链路：<strong>"标准在『范围』章节未说明适用对象"</strong>。</p>
+      <table>
+        <thead><tr><th>阶段</th><th>代码定位</th><th>产生数据</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1. 规则定义</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/resources/review_rules/rules_test.md">rules_test.md</a> "范围章节完整性"</td>
+            <td><code class="inline">RuleItem(chunk_id="RAG-0001", scope="scope", analysis_mode="local", target_scopes=["scope"])</code></td>
+          </tr>
+          <tr>
+            <td>2. 索引</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/retrievers/vector_retriever.py">FaissVectorRetriever</a></td>
+            <td>TF-IDF 矩阵 + <code class="inline">index.ntotal = N</code> 条规则</td>
+          </tr>
+          <tr>
+            <td>3. 检索</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/retrieve.py">retrieve.py</a></td>
+            <td><code class="inline">section_rules=[{...chunk_id: RAG-0001, matched_scope: scope}]</code></td>
+          </tr>
+          <tr>
+            <td>4. 上下文</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/context_chunker.py">context_chunker.py</a></td>
+            <td><code class="inline">context_text="## 范围\n本标准规定了..."</code></td>
+          </tr>
+          <tr>
+            <td>5. 计划</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/llm_judge.py">LLMSoftRuleJudge.plan</a></td>
+            <td><code class="inline">JudgePlan(strategy="single", context_text=..., meta={"target_scopes": ["scope"], "chunks_total": 13, "chunks_used": 1})</code></td>
+          </tr>
+          <tr>
+            <td>6. 调用</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/llm_judge.py">_judge_with_sem</a> + <code class="inline">_call_single</code></td>
+            <td>LLM 返回 JSON：<code class="inline">{pass:false, severity_level:"中度", actual:"...", evidence_text:"...", confidence:0.7}</code></td>
+          </tr>
+          <tr>
+            <td>7. 转化</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/llm_judge.py">_build_issue</a></td>
+            <td><code class="inline">AuditIssue(issue_id="RAG-0001-file.pdf", status="fail", severity="中度", confidence=0.7, ...)</code></td>
+          </tr>
+          <tr>
+            <td>8. 反馈</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/review.py">judge_rules</a></td>
+            <td>写 <code class="inline">state["issues"]</code>（<code class="inline">operator.add</code> 追加）</td>
+          </tr>
+          <tr>
+            <td>9. 门控</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/review.py">quality_gate</a></td>
+            <td>status="fail" 的不计入 <code class="inline">insufficient_scopes</code> → 不触发扩域</td>
+          </tr>
+          <tr>
+            <td>10. 桶化</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/aggregate.py">aggregate.py</a></td>
+            <td><code class="inline">scope_buckets["content_llm::scope"]={total:1, fail:1, ...}</code></td>
+          </tr>
+          <tr>
+            <td>11. 报告</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/graphs/standard_review/nodes/report.py">write_outputs</a> + <a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/reporter.py">reporter.py</a></td>
+            <td>3 件套 + manifest；前端的 issue 卡片 = <code class="inline">### RAG-0001-file 范围章节完整性</code></td>
+          </tr>
+          <tr>
+            <td>12. 摘要</td>
+            <td><a href="file:///d:/deep-agents/src/standard_document_assistant/review_core/audit_summary.py">generate_audit_summary</a></td>
+            <td><code class="inline">key_risks=["scope 章节（1 项）"]</code> 进入 600 字摘要</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>24.11 关键设计决策一览</h3>
+      <table>
+        <thead><tr><th>决策</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>LLM 异常不重试</td><td><code class="inline">RetryPolicy.retry_on</code> 只列 <code class="inline">(RequestException, RuntimeError)</code>；JSON 解析失败通过 <code class="inline">safe_json_loads</code> + <code class="inline">_empty_result</code> 转 <code class="inline">_fallback_issue</code></td></tr>
+          <tr><td>章节缺失 → warn（不 fail）</td><td>"应当存在但缺失" 不强制阻断，但要在 trace + report 里可见</td></tr>
+          <tr><td>扩域最多 N 轮</td><td>防止 <code class="inline">widen → reload → judge</code> 死循环；N 默认 2，由 <code class="inline">config.max_review_rounds</code> 配</td></tr>
+          <tr><td>LLM 摘要可选</td><td><code class="inline">config.enable_audit_summary=False</code> 时完全跳过；LLM 不可用时降级到 <code class="inline">_offline_summary</code>（按 severity × scope 统计）</td></tr>
+          <tr><td>双通道事件</td><td><code class="inline">emit_event</code> 同时写 <code class="inline">state["trace_events"]</code> + 推 <code class="inline">review.*</code> SSE；不破坏 reviewer subagent / report.json / trace.json 的旧消费者</td></tr>
+          <tr><td>三后端分层（FAISS / JSON / memory）</td><td>faiss-cpu 装上走原路径，缺包回退到 JSON，再退到内存；保证 CI / 离线环境都能跑</td></tr>
+          <tr><td>确定性 + LLM 双轨</td><td>格式轨 5 项全是确定性正则检查；内容轨先 LLM 再叠 scope 覆盖；任何环节失败都有"依据不足"issue，不会漏报</td></tr>
+          <tr><td>LLM Judge 多策略</td><td>不同 <code class="inline">analysis_mode</code> 用不同 prompt + 上下文窗口长度；策略选择纯函数 <code class="inline">_choose_strategy</code>，可单测</td></tr>
+        </tbody>
+      </table>
     </section>
 
     <footer>
